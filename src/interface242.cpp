@@ -795,6 +795,25 @@ static inline bool  checkAndSetLidResSt(CDLLResult &res, int nMax, float score)
 
 }
 
+#define CHECK_PERFOMANCE
+#ifdef CHECK_PERFOMANCE
+static unsigned mycounter;
+static inline void set_count(){
+    mycounter = clock();
+}
+static inline unsigned get_count(){
+    return clock() - mycounter;
+}
+
+#else
+static inline void set_count(){
+
+}
+static inline unsigned get_count(){
+    return 0;
+}
+#endif
+
 static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle hVAD, int hTLI)
 {
     char* &pData = rec.projData.m_pData;
@@ -804,7 +823,9 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle h
 	char WriteLog[1024];
     logLen = 0;
     logLen += sprintf(WriteLog+logLen, "LIDREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
-
+    #ifdef CHECK_PERFOMANCE
+    ostringstream clockoutput("OUTPUTCLOCK ");
+    #endif
     while(true){
         short *recBuf = reinterpret_cast<short*>(pData);
         unsigned recBufLen = dataLen / sizeof(short);
@@ -817,7 +838,12 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle h
         }
 
         if(hMCut != NULL){
-            if(cutMusic(hMCut, recBuf, recBufLen, rec.mcutBuf, rec.mcutBufLen)){
+            set_count();
+            bool retm = cutMusic(hMCut, recBuf, recBufLen, rec.mcutBuf, rec.mcutBufLen);
+            #ifdef CHECK_PERFOMANCE
+            clockoutput<< "CUTMUSIC "<< recBufLen<< " "<< rec.mcutBufLen<< " "<< get_count()<< " ";
+            #endif
+            if(retm){
             }
             else{
                 rec.mcutBufLen = 0;
@@ -844,7 +870,12 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle h
         }
 
         if(hVAD != NULL){
-            if(cutVAD(hVAD, recBuf, recBufLen, rec.vadBuf, rec.vadBufLen)){
+            set_count();
+            bool retv = cutVAD(hVAD, recBuf, recBufLen, rec.vadBuf, rec.vadBufLen);
+            #ifdef CHECK_PERFOMANCE
+            clockoutput<< "CUTVAD "<< recBufLen << " "<< rec.vadBufLen<< " "<< get_count()<< " ";
+            #endif
+            if(retv){
             }
             else{
                 rec.vadBufLen = 0;   
@@ -872,14 +903,20 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle h
         }
         int nMax;
         float score;
-        //LIDScore(rec.mcutBuf, rec.mcutBufLen, nMax, score, hTLI);
+        set_count();
         scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
+        #ifdef CHECK_PERFOMANCE
+        clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
+        #endif
         if(checkAndSetLidResSt(rec.result, nMax, score)){
             reportResult(rec.result, WriteLog, logLen);
         }
         break;
     }
     LOG_INFO(g_logger, WriteLog<< "eop.");
+    #ifdef CHECK_PERFOMANCE
+    LOGFMTI(clockoutput.str().c_str());
+    #endif
 }
 
 struct WavBuf{
@@ -914,10 +951,10 @@ static inline void release_rec_bufs(unsigned remLen = 0)
         short * &buf1 = localWavBufs[idx].data;
         unsigned &len1 = localWavBufs[idx].len;
         assert(len1 >= g_uWavBufLenMin);
-        if(len1 > remLen){
+        //if(len1 > remLen){
             len1 = remLen;
             buf1 = (short*)realloc(buf1, len1 * sizeof(short));
-        }
+        //}
     }
 }
 

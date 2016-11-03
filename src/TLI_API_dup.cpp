@@ -5,9 +5,11 @@
     > Created Time: Sat 08 Oct 2016 03:19:25 AM PDT
  ************************************************************************/
 
+#include <pthread.h>
+#include <cctype>
 #include <cstdio>
 #include <cassert>
-#include <pthread.h>
+#include <cstdlib>
 
 #include "TLI_API.h"
 
@@ -39,7 +41,7 @@ public:
 LIDSpace4TLI* LIDSpace4TLI::onlyone = NULL;
 pthread_mutex_t LIDSpace4TLI::onlyoneLock = PTHREAD_MUTEX_INITIALIZER;
 
-int g_nTemplateNum=17;
+int g_nTemplateNum=19;
 int* pnAllTemplateIDs = NULL;
 //int *g_pnTemplateIDs = NULL;
 int g_SecondVAD=0;
@@ -47,9 +49,32 @@ int g_bUseDetector=0;
 int g_MaxLIDLen = 3600;
 int g_MinLIDLen = 5;
 unsigned g_nThreadNum = 4;
+const unsigned MAXLINE_LEN = 100;
+
+unsigned countLinesInFile(const char *file)
+{
+    unsigned cnt = 0;   
+    FILE *fp = fopen(file, "r");
+    if(fp == NULL){
+        fprintf(stderr, "cannot open file %s.\n", file);
+        exit(1);
+    }
+    char szTemp[MAXLINE_LEN];
+    while(!feof(fp)){
+        char *stPtr = fgets(szTemp, MAXLINE_LEN, fp);
+        if(stPtr == NULL) break;
+        while(*stPtr != '\0'){
+            if(isalnum(*stPtr))break;
+            stPtr ++;
+        }
+        if(*stPtr != '\0') cnt ++;
+    }
+    return cnt;
+}
 void initTLI()
 {
-    TLI_Init_addVAD_1("ioacas/sysdir", g_nTemplateNum, g_nThreadNum, g_MaxLIDLen, g_MinLIDLen, g_SecondVAD, g_bUseDetector);
+    g_nTemplateNum = countLinesInFile("ioacas/sysdir/param.txt");
+    TLI_Init_addVAD_1(const_cast<char*>("ioacas/sysdir"), g_nTemplateNum, g_nThreadNum, g_MaxLIDLen, g_MinLIDLen, g_SecondVAD, g_bUseDetector);
 }
 
 void rlseTLI()
