@@ -3,8 +3,8 @@ CCC=g++#icpc
 CXX=g++#icpc
 
 CPPFLAGS=-g
-SRCCS:=$(addprefix src/,apue.c myiofuncs.c myqueue.c)
-SRCCPPS:= $(addprefix src/,comm_struct.cpp test242.cpp)
+SRCCS:=$(addprefix src/,apue.c myiofuncs.c)
+SRCCPPS:= $(addprefix src/,comm_struct.cpp test242.cpp waveinfo.cpp)
 OBJCS:=$(SRCCS:.c=.o)
 OBJCPPS:=$(SRCCPPS:.cpp=.o)
 testmain: $(OBJCS) $(OBJCPPS)

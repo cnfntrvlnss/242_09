@@ -30,7 +30,8 @@ using namespace std;
 #include "apue.h"
 #include "myiofuncs.h"
 #include "comm_struct.h"
-#include "myqueue.h"
+#include "waveinfo.h"
+//#include "myqueue.h"
 #include "../../include/interface242.h"
 //#include "../../src/log4z.h"
 //#include "../../src/commonFunc.h"
@@ -239,22 +240,30 @@ void *sendProjectProcess(void *param)
         pthread_mutex_unlock(&sendCSLocker);
         if(ptask == NULL) break;
         printf("<%u> get task[%d]  %s\n", (unsigned)curpid, count++, ptask->filePath);
-		FILE *ifd = fopen(ptask->filePath, "rb");
-		if(ifd == NULL){
+        ifstream ifs(ptask->filePath, ios::binary | ios::in);
+        if(ifs.fail()){
 			//LOGFMTE("fail to open file %s\n", ptask->filePath);
 			fprintf(stderr, "fail to open file %s\n", ptask->filePath);
 			continue;
-		}
-		fseek(ifd, 0, SEEK_END);
-		long int filelen = ftell(ifd);
-        if(filelen <= 44){
-            fclose(ifd);   
+        }
+        PCM_HEADER wavHeader;
+        long skipLen;
+        if(!read_wave_header(ifs, &wavHeader, &skipLen)){
+            fprintf(stderr, "fail to parse pcm head from file %s.\n", ptask->filePath);
+            ifs.close();
             delete ptask;
             continue;
         }
-
-		ptask->dataLen = filelen - 44;
-		fseek(ifd, 44, SEEK_SET);
+        if(ifs.eof()){
+            fprintf(stderr, "no wave data in file %s.\n", ptask->filePath);
+            ifs.close();
+            delete ptask;
+            continue;
+        }
+        long headlen = ifs.tellg();
+        ifs.seekg(0, ios_base::end);
+		ptask->dataLen = ifs.tellg() - headlen;
+        ifs.seekg(headlen);
         ptask->sendLen = 0;
         pthread_mutex_lock(&g_ProjIdsLock);
         g_mId2Infos[ptask->id] = *ptask;
@@ -262,7 +271,11 @@ void *sendProjectProcess(void *param)
 
 		while(true)
 		{
-			int bulksize = fread(databuf, 1, g_packetBytes, ifd);
+            ifs.read(databuf, g_packetBytes);
+			int bulksize = ifs.gcount();
+            if(bulksize % 2 != 0){
+                fprintf(stderr, "the length of data is odd, skiplen: %d, headlen: %ld, datalen: %ld, file %s.\n", skipLen, headlen, ptask->dataLen, ptask->filePath);
+            }
 			if(bulksize > 0){
                 WavDataUnit dataUnit;
                 dataUnit.m_iPCBID = ptask->id;
@@ -277,15 +290,15 @@ void *sendProjectProcess(void *param)
                     pthread_mutex_unlock(&g_ProjIdsLock);
                 }
 			}
-			if(ferror(ifd) && !feof(ifd)){
+			if(ifs.fail() && !ifs.eof()){
 				//LOGFMTE("error: %s; file %s\n", strerror(errno), ptask->filePath);
 				printf("error: %s; file %s\n", strerror(errno), ptask->filePath);
 				break;
-			} else if(feof(ifd)){
+			} else if(ifs.eof()){
 				break;
 			}
 		}
-		fclose(ifd);
+        ifs.close();
         
         bool bSendData = false;
         pthread_mutex_lock(&g_ProjIdsLock);
@@ -362,7 +375,7 @@ void saveLeftItems()
             culcnt++;
             string tmpStr = it->second.toString() + "\n";
             fwrite(tmpStr.c_str(), 1, tmpStr.size(), g_fpRes);
-            fprintf(stderr, "saveLeftItems PID=%u no result from Ioacas module.\n", it->second.id);
+            fprintf(stderr, "saveLeftItems PID=%lu no result from Ioacas module.\n", it->second.id);
         }
     }
     g_mId2Infos.clear();

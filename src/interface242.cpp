@@ -510,6 +510,7 @@ int InitDLL(int iPriority,
 
 int SendData2DLL(WavDataUnit *p)
 {
+    assert(p->m_iDataLen % 2 == 0);
     const unsigned HEADSIZE = 100;
     char szHead[HEADSIZE];
     snprintf(szHead, HEADSIZE, "SendData2DLL PID=%lu SIZE=%u ", p->m_iPCBID, p->m_iDataLen);
