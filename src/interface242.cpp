@@ -532,8 +532,8 @@ int SendData2DLL(WavDataUnit *p)
 	if(NewReportedID.find(p->m_iPCBID) != NewReportedID.end())
 	{
 		pthread_mutex_unlock(&g_lockNewReported);
-		LOG_INFO(g_logger, szHead<< "abandoned for being processed recently.");
-		return 0;
+		LOG_WARN(g_logger, szHead<< "abandoned for being processed recently.");
+		return -1;
 	}
 	pthread_mutex_unlock(&g_lockNewReported);
 

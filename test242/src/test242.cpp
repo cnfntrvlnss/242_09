@@ -35,6 +35,7 @@ using namespace std;
 //#include "../../src/log4z.h"
 //#include "../../src/commonFunc.h"
 //extern zsummer::log4z::ILog4zManager *g_Log4zManager;
+#define CHECK_PREFORMANCE
 
 typedef int (*FuncInitDll)(int iPriority,
         int iThreadNum,
@@ -55,6 +56,7 @@ FuncNotifyProjFinish funcNotifyProjFinish;
 FuncIsAllFinished funcIsAllFinished;
 #define MAX_PATH 512
 unsigned g_packetBytes = 320000;
+bool g_bSingleProjectMode = false;
 //namespace zen4audio{
 //    void notifyProjFinish(unsigned long);
 //    bool isAllFinished();
@@ -107,7 +109,7 @@ public:
         oss<< " retLen: "<< retLen<< " elapseTime: "<< recatchtime - starttime<< " targetID: "<< targetID<< " likely: "<< iLikely;
 		return oss.str();
 	}
-	unsigned long long id; //unique identity of one object.
+	unsigned long id; //unique identity of one object.
     //std::string filePath;
     char filePath[MAX_PATH];
 	long int dataLen; //total size anticipated by some way.
@@ -133,24 +135,6 @@ static string csubstr(const char *str, unsigned st, unsigned ed)
     strncpy(curStr, str + st, len);
     curStr[len] = '\0';
     return string(curStr);
-}
-vector<string> get_file_list(const char *root)
-{
-	vector<string> ret;
-	DIR * pDir;
-    struct dirent *pDirent;
-    if((pDir = opendir(root)) == NULL)
-		err_sys("can't open %s", root);
-	while((pDirent = readdir(pDir)) != NULL)
-	{
-		char *curname = pDirent->d_name;
-        if(curname[0] == '.') continue;
-		char *lastdotptr = strrchr(curname, '.');
-		if(lastdotptr != NULL && strcmp(lastdotptr, ".wav")==0){
-			ret.push_back(pDirent->d_name);
-		}
-	}
-	return ret;
 }
 
 int receive_result(unsigned int iModuleID, CDLLResult *res)
@@ -235,7 +219,14 @@ void *send_data_second_timer_sub(void *param)
             ptask->starttime = time(NULL);
         }
         funcNotifyProjFinish(ptask->id);
-	}
+        #ifdef CHECK_PREFORMANCE
+        if(g_bSingleProjectMode){
+            while(!funcIsAllFinished()){
+                sleep(3);
+            }
+        } 
+        #endif
+    }
 	free(databuf);
 	return NULL;
 }
@@ -251,96 +242,102 @@ void send_data_parallel(int paranum)
 	init_myqueue(&taskque);
 	int count = 0;
 	pthread_t curpid = pthread_self();
-	if(paranum == 1){
-		for(std::map<unsigned long long, ProjInfo>::iterator it= g_mId2Infos.begin(); it != g_mId2Infos.end(); it++){
-			//LOGFMTI("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
-			printf("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
-			myqueue_put(&taskque, &it->second);
-		}
-		myqueue_putend(&taskque);
-		send_data_second_timer_sub(&taskque);
-	}
-	else{
-		pthread_t *allthds = (pthread_t*)malloc(paranum * sizeof(pthread_t));
-		for(int i=0; i<paranum; i++){
-			int crtret = pthread_create(&(allthds[i]), NULL, send_data_second_timer_sub, &taskque);
-			if(crtret != 0){
-				destroy_myqueue(&taskque);
-				free(allthds);
-				err_sys("error while creating pthread");
-			}
-		}
-		for(std::map<unsigned long long, ProjInfo>::iterator it= g_mId2Infos.begin(); it != g_mId2Infos.end(); it++){
-			//LOGFMTI("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
-			printf("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
-			myqueue_put(&taskque, &(it->second));
-		}
-		myqueue_putend(&taskque);
-		
-		for(int i=0; i<paranum; i++)
-		{
-			int err = pthread_join(allthds[i], NULL);
-			if(err != 0){
-				//LOGFMTI("fail to join thread: idx %d", i);
-				printf("fail to join thread: idx %d", i);
-			}
-		}
-		free(allthds);
-	}
+
+    pthread_t *allthds = (pthread_t*)malloc(paranum * sizeof(pthread_t));
+    for(int i=0; i<paranum; i++){
+        int crtret = pthread_create(&(allthds[i]), NULL, send_data_second_timer_sub, &taskque);
+        if(crtret != 0){
+            destroy_myqueue(&taskque);
+            free(allthds);
+            err_sys("error while creating pthread");
+        }
+    }
+    for(std::map<unsigned long long, ProjInfo>::iterator it= g_mId2Infos.begin(); it != g_mId2Infos.end(); it++){
+        //LOGFMTI("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
+        printf("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
+        myqueue_put(&taskque, &(it->second));
+    }
+    myqueue_putend(&taskque);
+    
+    for(int i=0; i<paranum; i++)
+    {
+        int err = pthread_join(allthds[i], NULL);
+        if(err != 0){
+            //LOGFMTI("fail to join thread: idx %d", i);
+            printf("fail to join thread: idx %d", i);
+        }
+    }
+    free(allthds);
 	destroy_myqueue(&taskque);
 }
 
 /**
  * 从模式*_<pid>_*中提取出节目名，当节目名唯一时，提取成功，否则，提取失败。
  */
-bool parse_allpaths_pids(const vector<string>& allpaths, vector<unsigned long long>& accordpids)
+void parseWavePid(string wavePath, unsigned long& pid, unsigned long defPid)
 {
-	accordpids.clear();
-	for(size_t idx=0; idx < allpaths.size(); idx++){
-		string file = allpaths[idx];
-		size_t fipl = file.find_first_of("_");
+    pid = defPid;
+    while(true){
+		size_t fipl = wavePath.find_first_of("_");
 		if(fipl == string::npos) break;
-		size_t sepl = file.find_first_of("_", fipl+1);
+		size_t sepl = wavePath.find_first_of("_", fipl+1);
 		if(sepl == string::npos) break;
-		string strpid = file.substr(fipl + 1, sepl - fipl -1);
+		string strpid = wavePath.substr(fipl + 1, sepl - fipl -1);
 		unsigned long long ullvar;
 		if(sscanf(strpid.c_str(), "%llu%", &ullvar) != 1) break;
-		accordpids.push_back(ullvar);
-	}
-	if(accordpids.size() != allpaths.size()){
-		accordpids.clear();
-	}
-	set<unsigned long long> pidsSet;
-	for (unsigned u=0; u< accordpids.size(); u++){
-		if(pidsSet.insert(accordpids[u]).second == false){
-			accordpids.clear();
-			break;
-		}
-	}
-	return accordpids.size() > 0;
+        pid = ullvar;
+        break;
+    }
 }
 /**
  * 若首次执行该函数，就把rt目录下的wav文件读出；后面执行此函数，就把上次读出的删除并把新的文件代替，继续下一轮执行。
  * 继续与否可以通过与用户交互得知。
  *
  */
+vector<string> get_file_list(const char *root)
+{
+	vector<string> ret;
+	DIR * pDir;
+    struct dirent *pDirent;
+    if((pDir = opendir(root)) == NULL)
+		err_sys("can't open %s", root);
+	while((pDirent = readdir(pDir)) != NULL)
+	{
+		char *curname = pDirent->d_name;
+        if(curname[0] == '.') continue;
+		char *lastdotptr = strrchr(curname, '.');
+		if(lastdotptr != NULL && strcmp(lastdotptr, ".wav")==0){
+			ret.push_back(pDirent->d_name);
+		}
+	}
+	return ret;
+}
 static size_t fillTaskInfosGlobal(const char *rt)
 {
 	g_mId2Infos.clear();
-	vector<string> allwavs = get_file_list(rt);
-	vector<unsigned long long> parsedpids;
-	parse_allpaths_pids(allwavs, parsedpids);
-	for(int i=0; i<allwavs.size(); i++){
-		ProjInfo monkey;
-		if(parsedpids.size() > 0) monkey.id = parsedpids[i];
-        else monkey.id = i+1;
-        snprintf(monkey.filePath, MAX_PATH, "%s%s", rt, allwavs[i].c_str());
-		g_mId2Infos[monkey.id] = monkey;
-	}
-	return g_mId2Infos.size();
+    DIR * pDir;
+    struct dirent *pDirent;
+    if((pDir = opendir(rt)) == NULL){
+        err_sys("cannot open dir %s.", rt);
+    }
+    unsigned long curId = 0;
+    while((pDirent = readdir(pDir)) != NULL){
+		char *curname = pDirent->d_name;
+        if(curname[0] == '.') continue;
+		char *lastdotptr = strrchr(curname, '.');
+		if(lastdotptr != NULL && strcmp(lastdotptr, ".wav")==0){
+            ProjInfo monkey;
+            snprintf(monkey.filePath, MAX_PATH, "%s%s", rt, curname);
+            monkey.id = curId;
+            parseWavePid(curname, monkey.id, monkey.id);
+            if(curId == monkey.id) curId ++;
+            g_mId2Infos[monkey.id] = monkey;
+		}
+    }
+    return g_mId2Infos.size();
 }
 
-void fetch_all_options(int argc, char* argv[], char *opts, map<char,  string> &optbox, const char *szHelp)
+void fetch_all_options(int argc, char* argv[], const char *opts, map<char,  string> &optbox, const char *szHelp)
 {
 	opterr = 1;
 	char c;
@@ -366,11 +363,9 @@ void saveLeftItems()
             culcnt++;
             string tmpStr = it->second.toString() + "\n";
             fwrite(tmpStr.c_str(), 1, tmpStr.size(), g_fpRes);
+            fprintf(stderr, "saveLeftItems PID=%u no result from Ioacas module.\n", it->second.id);
         }
     }
-
-    //LOGFMTI("saveLeftItems save %u items having no result.\n", culcnt);
-    printf("saveLeftItems save %u items having no result.\n", culcnt);
 }
 void interactWithMe()
 {
@@ -459,9 +454,9 @@ int main(int argc, char* argv[])
 	if(atexit(saveLeftItems) != 0){
 		fprintf(stderr, "error: fail to register exiting function savesendlist.\n");
 	}
-    const char *szHelp = " usage: program -d <wavedir> -p <threads> -k <result file>";
+    const char *szHelp = " usage: program -s -d <wavedir> -p <threads> -k <result file>";
     map<char, string> allopts;
-    fetch_all_options(argc, argv, "d:p:k:", allopts, szHelp);
+    fetch_all_options(argc, argv, "sd:p:k:", allopts, szHelp);
     int parallelNum = 1;
     char sendInfoFile[MAX_PATH];
     sprintf(sendInfoFile, "%s", "result.txt");
@@ -481,9 +476,13 @@ int main(int argc, char* argv[])
 	if(allopts.find('k') != allopts.end()){
 		sprintf(sendInfoFile, "%s", allopts['k'].c_str());
 	}
+    if(allopts.find('s') != allopts.end()){
+        g_bSingleProjectMode = true;
+    }
     //LOGI("-----<<<<<>>>>>-----\nWaveDir: "<< rootDir<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile);
     ostringstream oss;
     oss<<"-----<<<<<>>>>>-----\nWaveDir: "<< rootDir<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile<< endl;
+    oss<< "singleProjectMode: "<< g_bSingleProjectMode<< endl;
     printf(oss.str().c_str());
 
     g_fpRes = fopen(sendInfoFile, "w");
