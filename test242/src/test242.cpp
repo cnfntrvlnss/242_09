@@ -35,7 +35,6 @@ using namespace std;
 //#include "../../src/log4z.h"
 //#include "../../src/commonFunc.h"
 //extern zsummer::log4z::ILog4zManager *g_Log4zManager;
-#define CHECK_PREFORMANCE
 
 typedef int (*FuncInitDll)(int iPriority,
         int iThreadNum,
@@ -67,24 +66,15 @@ public:
 	ProjInfo(): id(0), dataLen(0), sendLen(0), retLen(0), iAlarmType(0), starttime(0), recatchtime(0), targetID(0), iLikely(0)
 	{
         filePath[0] = '\0';
-        m_objLock = new pthread_mutex_t;
-		pthread_mutex_init(m_objLock, NULL);
 	}
 	~ProjInfo(){
-		pthread_mutex_destroy(m_objLock);
-        delete m_objLock;
 	}
     ProjInfo(const ProjInfo& other){
-        *this = other;
         memcpy(this, &other, sizeof(ProjInfo));
-        m_objLock = new pthread_mutex_t;
-        pthread_mutex_init(m_objLock, NULL);
     }
     ProjInfo& operator=(const ProjInfo& other){
         if(this != &other){
-            pthread_mutex_t *tmpPtr = m_objLock;
             memcpy(this, &other, sizeof(ProjInfo));
-            m_objLock = tmpPtr;
         }
         return *this;
     }
@@ -120,34 +110,31 @@ public:
 	time_t recatchtime;
     unsigned int targetID;
     int iLikely;
-	pthread_mutex_t *m_objLock;
 };
 
 map<unsigned long long, ProjInfo> g_mId2Infos;
+pthread_mutex_t g_ProjIdsLock = PTHREAD_MUTEX_INITIALIZER;
 FILE *g_fpRes = NULL;
-
-static string csubstr(const char *str, unsigned st, unsigned ed)
-{
-    const unsigned maxLineLength = 1024;
-    char curStr[maxLineLength];
-    unsigned len = ed- st;
-    len = len > maxLineLength -1 ? maxLineLength - 1 : len;
-    strncpy(curStr, str + st, len);
-    curStr[len] = '\0';
-    return string(curStr);
-}
 
 int receive_result(unsigned int iModuleID, CDLLResult *res)
 {
-	ProjInfo &curobj = g_mId2Infos[res->m_pDataUnit[0]->m_iPCBID];
-	pthread_mutex_lock(curobj.m_objLock);
+    pthread_mutex_lock(&g_ProjIdsLock);
+    map<unsigned long long, ProjInfo>::iterator it = g_mId2Infos.find(res->m_pDataUnit[0]->m_iPCBID);
+    if(it == g_mId2Infos.end()){
+        pthread_mutex_unlock(&g_ProjIdsLock);
+        fprintf(stderr, "ERROR miss project information for retrival result of ioacas.\n");
+        return 0;
+    }
+    ProjInfo curobj = it->second;
+    g_mId2Infos.erase(it);
+    pthread_mutex_unlock(&g_ProjIdsLock);
+
 	if(curobj.recatchtime == 0){
 		curobj.recatchtime = time(NULL);
         curobj.retLen = res->m_pDataUnit[0]->m_iDataLen;
         curobj.targetID = res->m_iTargetID;
         curobj.iLikely = (int)res->m_fLikely;
 	}
-	pthread_mutex_unlock(curobj.m_objLock);
     string tmpStr = curobj.toString() + "\n";
     if(g_fpRes != NULL){
         fwrite(tmpStr.c_str(), 1, tmpStr.size(), g_fpRes);
@@ -156,119 +143,6 @@ int receive_result(unsigned int iModuleID, CDLLResult *res)
     printf(tmpStr.c_str());
     
     return 0;
-}
-
-/**
- * a thread routine, fetch task from a queue passed as parameter. commit task by invoking ioacas_api
- *
- */
-void *send_data_second_timer_sub(void *param)
-{
-	Myqueue *ptaskque = (Myqueue*)param;
-	char *databuf = (char*)malloc(g_packetBytes);
-	if(databuf == NULL){
-		err_sys("fail to malloc memmory of size ", g_packetBytes);
-	}
-	pthread_t curpid = pthread_self();
-    WavDataUnit dataUnit;
-	int count = 0;
-	while(true){
-		ProjInfo *ptask = (ProjInfo*)myqueue_take(ptaskque);
-		if(ptask == NULL){
-			break;
-		}
-        //LOGFMTI("<%u> take task[%d]  %s\n", (unsigned)curpid, count++, ptask->filePath);
-        printf("<%u> take task[%d]  %s\n", (unsigned)curpid, count++, ptask->filePath);
-		FILE *ifd = fopen(ptask->filePath, "rb");
-		if(ifd == NULL){
-			//LOGFMTE("fail to open file %s\n", ptask->filePath);
-			fprintf(stderr, "fail to open file %s\n", ptask->filePath);
-			continue;
-		}
-		fseek(ifd, 0, SEEK_END);
-		long int filelen = ftell(ifd);
-		ptask->dataLen = filelen - 44;
-		fseek(ifd, 44, SEEK_SET);
-        ptask->sendLen = 0;
-		struct timeval tv;
-		tv.tv_sec = 1;
-		tv.tv_usec = 0;
-		while(true)
-		{
-			int bulksize = fread(databuf, 1, g_packetBytes, ifd);
-			if(bulksize > 0){
-				//Ioacas_API( ptask->id, databuf, bulksize, NULL, 0);
-                dataUnit.m_iPCBID = ptask->id;
-                dataUnit.m_iDataLen = bulksize;
-                dataUnit.m_pData = databuf;
-                if(funcSendData2Dll(&dataUnit) == 0){
-                    ptask->sendLen += bulksize;
-                }
-			}
-			if(ferror(ifd) && !feof(ifd)){
-				//LOGFMTE("error: %s; file %s\n", strerror(errno), ptask->filePath);
-				printf("error: %s; file %s\n", strerror(errno), ptask->filePath);
-				break;
-			} else if(feof(ifd)){
-				break;
-			}
-		}
-		fclose(ifd);
-        
-        if(ptask->sendLen != 0){
-            ptask->starttime = time(NULL);
-        }
-        funcNotifyProjFinish(ptask->id);
-        #ifdef CHECK_PREFORMANCE
-        if(g_bSingleProjectMode){
-            while(!funcIsAllFinished()){
-                sleep(3);
-            }
-        } 
-        #endif
-    }
-	free(databuf);
-	return NULL;
-}
-/**
- * 10 threads used for sending data. 
- */
-void send_data_parallel(int paranum)
-{
-	if(paranum <1){
-		return;
-	}
-	Myqueue taskque;
-	init_myqueue(&taskque);
-	int count = 0;
-	pthread_t curpid = pthread_self();
-
-    pthread_t *allthds = (pthread_t*)malloc(paranum * sizeof(pthread_t));
-    for(int i=0; i<paranum; i++){
-        int crtret = pthread_create(&(allthds[i]), NULL, send_data_second_timer_sub, &taskque);
-        if(crtret != 0){
-            destroy_myqueue(&taskque);
-            free(allthds);
-            err_sys("error while creating pthread");
-        }
-    }
-    for(std::map<unsigned long long, ProjInfo>::iterator it= g_mId2Infos.begin(); it != g_mId2Infos.end(); it++){
-        //LOGFMTI("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
-        printf("<%u> send task[%d]  %s\n", curpid, count++, it->second.filePath);
-        myqueue_put(&taskque, &(it->second));
-    }
-    myqueue_putend(&taskque);
-    
-    for(int i=0; i<paranum; i++)
-    {
-        int err = pthread_join(allthds[i], NULL);
-        if(err != 0){
-            //LOGFMTI("fail to join thread: idx %d", i);
-            printf("fail to join thread: idx %d", i);
-        }
-    }
-    free(allthds);
-	destroy_myqueue(&taskque);
 }
 
 /**
@@ -284,57 +158,181 @@ void parseWavePid(string wavePath, unsigned long& pid, unsigned long defPid)
 		if(sepl == string::npos) break;
 		string strpid = wavePath.substr(fipl + 1, sepl - fipl -1);
 		unsigned long long ullvar;
-		if(sscanf(strpid.c_str(), "%llu%", &ullvar) != 1) break;
+		if(sscanf(strpid.c_str(), "%llu", &ullvar) != 1) break;
         pid = ullvar;
         break;
     }
 }
-/**
- * 若首次执行该函数，就把rt目录下的wav文件读出；后面执行此函数，就把上次读出的删除并把新的文件代替，继续下一轮执行。
- * 继续与否可以通过与用户交互得知。
- *
- */
-vector<string> get_file_list(const char *root)
+struct ProjInfoIter{
+    string audioRoot;
+    DIR *pDir;
+    static unsigned long projectCount;
+    static unsigned long otherCount;
+
+    ProjInfoIter():
+        pDir(NULL)
+    {}
+    ProjInfoIter(const char *rt):
+        pDir(NULL)
+    {
+        open(rt);
+    }
+    ~ProjInfoIter(){
+        if(pDir != NULL){
+            closedir(pDir);
+            pDir = NULL;
+        }
+    }
+    void open(const char *rt);
+    ProjInfo* next();
+};
+unsigned long ProjInfoIter::projectCount = 0;
+unsigned long ProjInfoIter::otherCount = 0;
+void ProjInfoIter::open(const char *rt)
 {
-	vector<string> ret;
-	DIR * pDir;
-    struct dirent *pDirent;
-    if((pDir = opendir(root)) == NULL)
-		err_sys("can't open %s", root);
-	while((pDirent = readdir(pDir)) != NULL)
-	{
-		char *curname = pDirent->d_name;
-        if(curname[0] == '.') continue;
-		char *lastdotptr = strrchr(curname, '.');
-		if(lastdotptr != NULL && strcmp(lastdotptr, ".wav")==0){
-			ret.push_back(pDirent->d_name);
-		}
-	}
-	return ret;
-}
-static size_t fillTaskInfosGlobal(const char *rt)
-{
-	g_mId2Infos.clear();
-    DIR * pDir;
-    struct dirent *pDirent;
+    if(pDir != NULL){
+        closedir(pDir);
+    }
     if((pDir = opendir(rt)) == NULL){
         err_sys("cannot open dir %s.", rt);
     }
-    unsigned long curId = 0;
+    audioRoot = rt;
+}
+ProjInfo* ProjInfoIter::next()
+{
+    if(pDir == NULL) return NULL;
+    char *curname = NULL;
+    struct dirent *pDirent;
     while((pDirent = readdir(pDir)) != NULL){
-		char *curname = pDirent->d_name;
+        curname = pDirent->d_name;
         if(curname[0] == '.') continue;
-		char *lastdotptr = strrchr(curname, '.');
-		if(lastdotptr != NULL && strcmp(lastdotptr, ".wav")==0){
-            ProjInfo monkey;
-            snprintf(monkey.filePath, MAX_PATH, "%s%s", rt, curname);
-            monkey.id = curId;
-            parseWavePid(curname, monkey.id, monkey.id);
-            if(curId == monkey.id) curId ++;
-            g_mId2Infos[monkey.id] = monkey;
-		}
+        char *lastdotptr = strrchr(curname, '.');
+        if(lastdotptr != NULL && strcmp(lastdotptr, ".wav") == 0) break;
     }
-    return g_mId2Infos.size();
+    if(pDirent != NULL){
+        ProjInfo* proj = new ProjInfo;
+        snprintf(proj->filePath, MAX_PATH, "%s%s", audioRoot.c_str(), curname);
+        parseWavePid(curname, proj->id, static_cast<unsigned long>(-1));
+        if(proj->id == static_cast<unsigned long>(-1)){
+            proj->id = otherCount;
+            otherCount ++;
+        }
+        else{
+            projectCount ++;
+        }
+        return proj;
+    }
+    return NULL;
+}
+
+string g_AudioDir;
+ProjInfoIter g_iterProjInfo;
+pthread_mutex_t sendCSLocker = PTHREAD_MUTEX_INITIALIZER;
+void *sendProjectProcess(void *param)
+{
+	pthread_t curpid = pthread_self();
+    unsigned count = 0;
+	char *databuf = (char*)malloc(g_packetBytes);
+    while(true){
+        pthread_mutex_lock(&sendCSLocker);
+        ProjInfo *ptask = g_iterProjInfo.next();
+        pthread_mutex_unlock(&sendCSLocker);
+        if(ptask == NULL) break;
+        printf("<%u> get task[%d]  %s\n", (unsigned)curpid, count++, ptask->filePath);
+		FILE *ifd = fopen(ptask->filePath, "rb");
+		if(ifd == NULL){
+			//LOGFMTE("fail to open file %s\n", ptask->filePath);
+			fprintf(stderr, "fail to open file %s\n", ptask->filePath);
+			continue;
+		}
+		fseek(ifd, 0, SEEK_END);
+		long int filelen = ftell(ifd);
+        if(filelen <= 44){
+            fclose(ifd);   
+            delete ptask;
+            continue;
+        }
+
+		ptask->dataLen = filelen - 44;
+		fseek(ifd, 44, SEEK_SET);
+        ptask->sendLen = 0;
+        pthread_mutex_lock(&g_ProjIdsLock);
+        g_mId2Infos[ptask->id] = *ptask;
+        pthread_mutex_unlock(&g_ProjIdsLock);
+
+		while(true)
+		{
+			int bulksize = fread(databuf, 1, g_packetBytes, ifd);
+			if(bulksize > 0){
+                WavDataUnit dataUnit;
+                dataUnit.m_iPCBID = ptask->id;
+                dataUnit.m_iDataLen = bulksize;
+                dataUnit.m_pData = databuf;
+                if(funcSendData2Dll(&dataUnit) == 0){
+                    pthread_mutex_lock(&g_ProjIdsLock);
+                    if(g_mId2Infos.find(ptask->id) != g_mId2Infos.end()){
+                        ProjInfo& curobj = g_mId2Infos[ptask->id];
+                        curobj.sendLen += bulksize;
+                    }
+                    pthread_mutex_unlock(&g_ProjIdsLock);
+                }
+			}
+			if(ferror(ifd) && !feof(ifd)){
+				//LOGFMTE("error: %s; file %s\n", strerror(errno), ptask->filePath);
+				printf("error: %s; file %s\n", strerror(errno), ptask->filePath);
+				break;
+			} else if(feof(ifd)){
+				break;
+			}
+		}
+		fclose(ifd);
+        
+        bool bSendData = false;
+        pthread_mutex_lock(&g_ProjIdsLock);
+        if(g_mId2Infos.find(ptask->id) != g_mId2Infos.end()){
+            ProjInfo& curobj = g_mId2Infos[ptask->id];
+            if(curobj.sendLen != 0){
+                bSendData = true;
+                curobj.starttime = time(NULL);
+            }
+        }
+        pthread_mutex_unlock(&g_ProjIdsLock);
+        if(bSendData){
+            funcNotifyProjFinish(ptask->id);
+        }
+
+        delete ptask;
+        if(g_bSingleProjectMode){
+            while(!funcIsAllFinished()){
+                sleep(3);
+            }
+        } 
+    }
+    free(databuf);
+    return NULL;
+}
+void send_project_parallel(int paranum)
+{
+    if(paranum < 1) return;
+    g_iterProjInfo.open(g_AudioDir.c_str());
+    pthread_t *allthds = (pthread_t*)malloc(paranum * sizeof(pthread_t));
+    for(int i=0; i<paranum; i++){
+        int crtret = pthread_create(&(allthds[i]), NULL, sendProjectProcess, NULL);
+        if(crtret != 0){
+            free(allthds);
+            err_sys("error while creating pthread");
+        }
+    }
+
+    for(int i =0; i< paranum; i++){
+        int err = pthread_join(allthds[i], NULL);
+        if(err != 0){
+            //LOGFMTI("fail to join thread: idx %d", i);
+            printf("fail to join thread: idx %d", i);
+        }
+    }
+    g_iterProjInfo.~ProjInfoIter();
+    free(allthds);
 }
 
 void fetch_all_options(int argc, char* argv[], const char *opts, map<char,  string> &optbox, const char *szHelp)
@@ -358,6 +356,7 @@ void fetch_all_options(int argc, char* argv[], const char *opts, map<char,  stri
 void saveLeftItems()
 {
     unsigned culcnt = 0;
+    pthread_mutex_lock(&g_ProjIdsLock);
     for(map<unsigned long long, ProjInfo>::const_iterator it=g_mId2Infos.begin(); it!=g_mId2Infos.end(); it++){
         if(it->second.recatchtime == 0){
             culcnt++;
@@ -366,6 +365,8 @@ void saveLeftItems()
             fprintf(stderr, "saveLeftItems PID=%u no result from Ioacas module.\n", it->second.id);
         }
     }
+    g_mId2Infos.clear();
+    pthread_mutex_unlock(&g_ProjIdsLock);
 }
 void interactWithMe()
 {
@@ -460,16 +461,14 @@ int main(int argc, char* argv[])
     int parallelNum = 1;
     char sendInfoFile[MAX_PATH];
     sprintf(sendInfoFile, "%s", "result.txt");
-    char rootDir[512];
-    sprintf(rootDir, "TestWave/");
+    g_AudioDir = "TestWave";
 	if(allopts.find('d') != allopts.end()){
-		sprintf(rootDir, "%s", allopts['d'].c_str());
-        size_t rtlen = strlen(rootDir);
-        if(rootDir[rtlen - 1] != '/'){
-            rootDir[rtlen ++] = '/';
-            rootDir[rtlen] = '\0';
-        }
+        g_AudioDir = allopts['d'];
 	}
+    size_t rtlen = g_AudioDir.size();
+    if(g_AudioDir[rtlen - 1] != '/'){
+        g_AudioDir.append("/");
+    }
 	if(allopts.find('p')!= allopts.end()){
 		parallelNum = atoi(allopts['p'].c_str());
 	}
@@ -481,7 +480,7 @@ int main(int argc, char* argv[])
     }
     //LOGI("-----<<<<<>>>>>-----\nWaveDir: "<< rootDir<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile);
     ostringstream oss;
-    oss<<"-----<<<<<>>>>>-----\nWaveDir: "<< rootDir<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile<< endl;
+    oss<<"-----<<<<<>>>>>-----\nWaveDir: "<< g_AudioDir.c_str()<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile<< endl;
     oss<< "singleProjectMode: "<< g_bSingleProjectMode<< endl;
     printf(oss.str().c_str());
 
@@ -495,6 +494,7 @@ int main(int argc, char* argv[])
     int *pThreadCPUID = NULL;
     int iDataUnitBufSize = 0;
     char workPath[MAX_PATH];
+    workPath[0] = '\0';
     unsigned int iModuleID = 0;
     int retInit = funcInitDll(iPriority, iThreadNum, pThreadCPUID, receive_result, iDataUnitBufSize, workPath, iModuleID);
     if(retInit != 0){
@@ -503,10 +503,8 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-    int audionum = fillTaskInfosGlobal(rootDir);
-    fprintf(stdout, "having read %d tasks.", audionum);
     interactWithMe();
-    send_data_parallel(parallelNum);
+    send_project_parallel(parallelNum);
     struct timeval tv;
     tv.tv_sec = 0;
     tv.tv_usec = 0;
@@ -515,7 +513,7 @@ int main(int argc, char* argv[])
             cout<< "checked all tasks finishing in BufferGlobal.\n";
              break;   
         }
-        tv.tv_sec = 10;
+        tv.tv_sec = 5;
         select(0, NULL, NULL, NULL, &tv);
     }
 	cout<< ">>>>>>>>>>>>>finish test<<<<<<<<<<<<<<<\n";

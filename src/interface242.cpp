@@ -901,15 +901,17 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle h
             sprintf(WriteLog+strlen(WriteLog), "too short ");
             break;
         }
-        int nMax;
-        float score;
-        set_count();
-        scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
-        #ifdef CHECK_PERFOMANCE
-        clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
-        #endif
-        if(checkAndSetLidResSt(rec.result, nMax, score)){
-            reportResult(rec.result, WriteLog, logLen);
+        if(g_bUseLid){
+            int nMax;
+            float score;
+            set_count();
+            scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
+            #ifdef CHECK_PERFOMANCE
+            clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
+            #endif
+            if(checkAndSetLidResSt(rec.result, nMax, score)){
+                reportResult(rec.result, WriteLog, logLen);
+            }
         }
         break;
     }
@@ -1033,7 +1035,7 @@ void* IoaRegThread(void *param)
             This_Buf.result.m_iTargetID = 0;
             This_Buf.result.m_iAlarmType = 0;
 			//for TLI
-			if(g_bUseLid)
+			if(g_bUseLid || g_bLidUseMusicDetect || g_bLidUseVAD)
 			{
                 lidRegProcess(This_Buf, hMCut, hVAD, hTLI);
 			}
