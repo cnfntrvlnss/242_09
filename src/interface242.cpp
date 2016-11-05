@@ -726,19 +726,20 @@ bool saveWave(char *pData, unsigned len, const char *saveFileName)
 {
     bool ret = false;
     FILE *fp = fopen(saveFileName, "ab");
-    if(NULL != fp){
-        PCM_HEADER pcmheader;
-        initialize_wave_header(&pcmheader, len);
-        int retw = fwrite(&pcmheader, sizeof(PCM_HEADER), 1, fp);
-        if(retw != 1){
-            LOG_WARN(g_logger, "fail to save data to file, filename: "<< saveFileName);
-        }
-        else{
-            fwrite(pData, 1, len, fp);
-            ret = true;
-        }
-        fclose(fp);
+    if(fp == NULL){
+        LOG_WARN(g_logger, "fail to open file "<< saveFileName<< " error: "<< strerror(errno));
     }
+    PCM_HEADER pcmheader;
+    initialize_wave_header(&pcmheader, len);
+    int retw = fwrite(&pcmheader, sizeof(PCM_HEADER), 1, fp);
+    if(retw != 1){
+        LOG_WARN(g_logger, "fail to save data to file, filename: "<< saveFileName);
+    }
+    else{
+        fwrite(pData, 1, len, fp);
+        ret = true;
+    }
+    fclose(fp);
     return ret;
 }
 

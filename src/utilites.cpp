@@ -13,7 +13,12 @@
 #include <dirent.h>
 #include "utilites.h"
 #include <algorithm>
+#include <string>
+#include <map>
+
+using namespace std;
 #define MAX_PATH 512
+#define MAX_LINE 1024
 
 /**
  * 分割字符串，用通用的默认形式，即，空格类字符作为分割符。
@@ -126,6 +131,7 @@ unsigned  procFilesInDir(const char* szDir, FuncProcessFile addr)
     }
     return cnt;
 }
+
 
 union MyConfigItemValue{
 	bool *bvar;
@@ -248,3 +254,85 @@ int parse_params_from_file(const char *fileName, ...)
     free(confarr);
 	return idx;
 }
+
+/**
+ * configuration comes form file. also be synchronized with that in file.
+ *
+ */
+typedef void (*UseConfigValue)(const char* key, const char* value);
+struct ConfigRoom{
+    struct StringPair{
+        string used;
+        string current;
+    };
+    map<string, StringPair> allconfigs;
+    string configFile;
+    time_t lastReadTime;
+
+    bool loadFromFile(const char* filePath = NULL);
+    bool isUpdated(const char* key);
+    bool accessValue(const char* key, string& value);
+    bool accessvalue(const char* key, UseConfigValue* funcAddr);
+};
+
+ConfigRoom g_Configs;
+
+static char* getValidString(char *tmpStr)
+{
+    if(tmpStr[0] == '\0') return NULL;
+    unsigned tmplen = strlen(tmpStr);
+    char* lastPtr = tmpStr + tmplen - 1;
+    while(lastPtr != tmpStr && isspace(*lastPtr)){
+        lastPtr --;
+    }
+    if(lastPtr == tmpStr){
+        if(isspace(*lastPtr)) return NULL;
+        else {
+            *(lastPtr + 1) = '\0';
+            return tmpStr;
+        }
+    }
+    *(lastPtr + 1) = '\0';
+    
+    while(isspace(*tmpStr)) tmpStr --;
+    return tmpStr;
+}
+
+bool ConfigRoom::loadFromFile(const char* filePath)
+{
+    if(filePath == NULL && configFile.size() == 0){
+        fprintf(stderr, "ERROR no config file specified.\n");
+        return false;
+    }
+    if(configFile != filePath){
+        fprintf(stderr, "WARN the current configure file is not used, for being not the same file with initial file. initial: %s, current: %s.\n", configFile.c_str(), filePath);
+    }
+    FILE *fp = fopen(configFile.c_str(), "r");
+    if(fp == NULL){
+        fprintf(stderr, "ERROR the configure file is not opened. file: %s.\n", configFile.c_str());
+        return false;
+    }
+    char groupName[MAX_PATH];
+    groupName[0] = '\0';
+    char tmpLine[MAX_LINE];
+    while(fgets(tmpLine, MAX_LINE, fp) != NULL){
+        char *validStr = getValidString(tmpLine);
+        if(validStr == NULL) return NULL;
+        char *comSt = strchr(validStr, '#');
+        if(comSt != NULL) *comSt = '\0';
+        if(*validStr == '['){
+            char *closePairPtr = strrchr(validStr, ']');
+            if(closePairPtr == NULL){
+                fprintf(stderr, "ERROR the line in configure file is illegal. line: %s.", validStr);
+                continue;
+            }
+            *closePairPtr = '\0';
+            char * validStr = getValidString(validStr + 1);
+            if(validStr == NULL) continue;
+            strncpy(groupName, validStr, MAX_PATH);
+        }
+    
+    }
+}
+
+

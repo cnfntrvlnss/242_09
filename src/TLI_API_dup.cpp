@@ -13,6 +13,7 @@
 
 #include "TLI_API.h"
 
+#define MAX_PATH 512
 static void initTLI();
 static void rlseTLI();
 class LIDSpace4TLI{
@@ -41,8 +42,11 @@ public:
 LIDSpace4TLI* LIDSpace4TLI::onlyone = NULL;
 pthread_mutex_t LIDSpace4TLI::onlyoneLock = PTHREAD_MUTEX_INITIALIZER;
 
+#define LANGNUM_MAX 100
+char g_SysDirPath[MAX_PATH] = "ioacas/sysdir";
 int g_nTemplateNum=19;
-int* pnAllTemplateIDs = NULL;
+int g_pnAllTemplateIDs[LANGNUM_MAX];
+char *g_pszAllTemplateNames[LANGNUM_MAX];
 //int *g_pnTemplateIDs = NULL;
 int g_SecondVAD=0;
 int g_bUseDetector=0;
@@ -74,20 +78,46 @@ unsigned countLinesInFile(const char *file)
 void initTLI()
 {
     g_nTemplateNum = countLinesInFile("ioacas/sysdir/param.txt");
-    TLI_Init_addVAD_1(const_cast<char*>("ioacas/sysdir"), g_nTemplateNum, g_nThreadNum, g_MaxLIDLen, g_MinLIDLen, g_SecondVAD, g_bUseDetector);
+    for(int idx=0; idx < g_nTemplateNum; idx ++){
+        g_pnAllTemplateIDs[idx] = idx;
+        char *curname = new char[10];
+        snprintf(curname, 10, "%d", idx);
+        g_pszAllTemplateNames[idx] = curname;
+    }
+    //TLI_Init_addVAD_1(const_cast<char*>("ioacas/sysdir"), g_nTemplateNum, g_nThreadNum, g_MaxLIDLen, g_MinLIDLen, g_SecondVAD, g_bUseDetector);
+    
+    int tliret = TLI_Init(g_SysDirPath, g_pnAllTemplateIDs, g_pszAllTemplateNames, g_nTemplateNum, g_nThreadNum);
+    if(tliret != 0){
+        if(tliret == -1){
+            fprintf(stderr, "ERROR model path is incorrect.\n");
+        }
+        else if(tliret == -2){
+            fprintf(stderr, "ERROR license is incorrect.\n");
+        }
+        else if(tliret == -3){
+            fprintf(stderr, "ERROR setting of thread number is incorrect.\n");
+        }
+        else if(tliret == -4){
+            fprintf(stderr, "ERROR model file is not found.\n");
+        }
+        else{
+            fprintf(stderr, "ERROR other error in tli_init.\n");
+        }
+        exit(1);
+    }
 }
 
 void rlseTLI()
 {
-    TLI_Exit_1();  
+    TLI_Exit();  
 }
 
 int openTLI_dup()
 {
     LIDSpace4TLI::initLID();
     TLI_HANDLE hret = -1;
-    int err = TLI_Open_1(hret);
-    if(hret < 0 || hret > g_nThreadNum){
+    int err = TLI_Open(hret);
+    if(hret < 0){
         fprintf(stderr, "ERROR in openTLI_dup, fail to call TLI_Open_1. error: %d.\n", err);
     }
 
@@ -96,19 +126,56 @@ int openTLI_dup()
 
 void closeTLI_dup(int hdl)
 {
-    TLI_Close_1(hdl);
+    TLI_Close(hdl);
 }
 
 void scoreTLI_dup(int hdl, short *pcmData, int pcmLen, int &resID, float &resScore)
 {
-    int langNum = g_nTemplateNum;
-    int *arrTemplateIDs = pnAllTemplateIDs;
-    int nMaxSpeechSec = 3600;
-    int nMinSpeechSec = 5;
+    int nMaxSec = 3600;
+    int nMinSec = 5;
     resID = -1;
     resScore = -1000;
-    int err = TLI_Recognize_1(hdl, arrTemplateIDs, langNum, (void*)pcmData, pcmLen * sizeof(short), nMinSpeechSec, nMaxSpeechSec, resID, resScore, "");
+    int err = TLI_Recognize(hdl, g_pnAllTemplateIDs, g_nTemplateNum, reinterpret_cast<char*>(pcmData), pcmLen * sizeof(short), nMinSec, nMaxSec);
     if(err != 0){
-        fprintf(stderr, "ERROR in scoreTLI_dup, failed to call TLI_Recognize_1. ret: %d.\n", err);
+        if(err == -1){
+            fprintf(stderr, "ERROR in tli_recognize, wrong handle.\n");
+        }
+        else if(err == -2){
+            fprintf(stderr, "ERROR in tli_recognize, the current thread is not initialized.\n");
+        }
+        else if(err == -3){
+            fprintf(stderr, "ERROR in tli_recognize, the index array is empty, or the lang num is not great than zero.\n");
+        }
+        else if(err == -4){
+            fprintf(stderr, "ERROR in tli_recognize, system go wrong.\n");
+        }
+        else if(err == -5){
+            //the audio length is too short.
+        }
+        else if(err == -6){
+            //the length after vad or music is too short.
+        }
+        else {
+            fprintf(stderr, "ERROR in tli_recognize, other error.\n");
+        }
+        return ;
+    }
+    //int err = TLI_Recognize_1(hdl, arrTemplateIDs, langNum, (void*)pcmData, pcmLen * sizeof(short), nMinSpeechSec, nMaxSpeechSec, resID, resScore, "");
+    
+    float scoreArr[LANGNUM_MAX];
+    int langNum = g_nTemplateNum + 1;
+    for(int idx=0; idx < langNum; idx++){
+        scoreArr[idx] = 0.0;
+    }
+    err = TLI_GetResult(hdl, scoreArr, langNum);
+    if(err == -1){
+        fprintf(stderr, "ERROR in TLI_GetResult.");
+        return ;
+    }
+    for(int idx=0; idx < g_nTemplateNum; idx++){
+        if(resScore < scoreArr[idx]){
+            resScore = scoreArr[idx];
+            resID = idx;
+        }
     }
 }
