@@ -254,6 +254,12 @@ void *sendProjectProcess(void *param)
             delete ptask;
             continue;
         }
+	if(wavHeader.fmt.wFormatTag != 1){
+		fprintf(stderr, "the wave is not pcm linear, skip it. file: %s.\n", ptask->filePath);
+		ifs.close();
+		delete ptask;
+		continue;
+	}
         if(ifs.eof()){
             fprintf(stderr, "no wave data in file %s.\n", ptask->filePath);
             ifs.close();
