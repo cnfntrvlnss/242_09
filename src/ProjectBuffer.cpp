@@ -18,6 +18,7 @@
 #include <iterator>
 using namespace std;
 
+#include "utilites.h"
 #include "ProjectBuffer.h"
 #include "log4z.h"
 extern zsummer::log4z::ILog4zManager *g_Log4zManager;
@@ -26,48 +27,6 @@ extern zsummer::log4z::ILog4zManager *g_Log4zManager;
 #define PCM_PERSEC_SMPS 8000
 #define PCM_PERSEC_LEN 16000
 namespace zen4audio{
-
-//////////////////////////////////////////////////////////////////////////
-// LockHelper
-//////////////////////////////////////////////////////////////////////////
-LockHelper::LockHelper()
-{
-#ifdef WIN32
-    InitializeCriticalSection(&_crit);
-#else
-    //_crit = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&_crit, &attr);
-    pthread_mutexattr_destroy(&attr);
-#endif
-}
-LockHelper::~LockHelper()
-{
-#ifdef WIN32
-    DeleteCriticalSection(&_crit);
-#else
-    pthread_mutex_destroy(&_crit);
-#endif
-}
-
-void LockHelper::lock()
-{
-#ifdef WIN32
-    EnterCriticalSection(&_crit);
-#else
-    pthread_mutex_lock(&_crit);
-#endif
-}
-void LockHelper::unLock()
-{
-#ifdef WIN32
-    LeaveCriticalSection(&_crit);
-#else
-    pthread_mutex_unlock(&_crit);
-#endif
-}
 
 unsigned BLOCKSIZE= 60 * 16000;
 vector<DataUnit*> g_vecFreeBlocks; 

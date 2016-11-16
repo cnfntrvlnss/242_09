@@ -16,6 +16,38 @@ using namespace std;
 
 #include <stdio.h>
 
+//////////////////////////////////////////////////////////////////////////
+//! LockHelper
+//////////////////////////////////////////////////////////////////////////
+class LockHelper
+{
+public:
+    LockHelper();
+    virtual ~LockHelper();
+
+public:
+    void lock();
+    void unLock();
+//private:
+#ifdef WIN32
+    CRITICAL_SECTION _crit;
+#else
+    pthread_mutex_t  _crit;
+#endif
+};
+
+//////////////////////////////////////////////////////////////////////////
+//! AutoLock
+//////////////////////////////////////////////////////////////////////////
+class AutoLock
+{
+public:
+    explicit AutoLock(LockHelper & lk):_lock(lk){_lock.lock();}
+    ~AutoLock(){_lock.unLock();}
+private:
+    LockHelper & _lock;
+};
+
 #define MAX_PATH 512
 /** 用于debug输出数组数组变量。
  *
@@ -72,3 +104,4 @@ bool make_directorys(const char *mypath);
 
 typedef bool (*FuncProcessFile)(const char*, const char*);
 unsigned procFilesInDir(const char* szDir, FuncProcessFile addr);
+

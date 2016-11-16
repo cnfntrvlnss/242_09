@@ -56,38 +56,6 @@ struct DataBlock{
     short *m_cnt;
 };
 
-//////////////////////////////////////////////////////////////////////////
-//! LockHelper
-//////////////////////////////////////////////////////////////////////////
-class LockHelper
-{
-public:
-    LockHelper();
-    virtual ~LockHelper();
-
-public:
-    void lock();
-    void unLock();
-//private:
-#ifdef WIN32
-    CRITICAL_SECTION _crit;
-#else
-    pthread_mutex_t  _crit;
-#endif
-};
-
-//////////////////////////////////////////////////////////////////////////
-//! AutoLock
-//////////////////////////////////////////////////////////////////////////
-class AutoLock
-{
-public:
-    explicit AutoLock(LockHelper & lk):_lock(lk){_lock.lock();}
-    ~AutoLock(){_lock.unLock();}
-private:
-    LockHelper & _lock;
-};
-
 //extern std::vector<DataUnit*> g_vecFreeBlocks; 
 /**
  *  用于节目缓存的类, 比之前的实现相比，最小化了功能；用到了唯一的内存管理代码，用于缓存空间的计数与控制.

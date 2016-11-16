@@ -15,10 +15,53 @@
 #include <algorithm>
 #include <string>
 #include <map>
+#include <sstream>
 
 using namespace std;
 #define MAX_PATH 512
 #define MAX_LINE 1024
+
+//////////////////////////////////////////////////////////////////////////
+// LockHelper
+//////////////////////////////////////////////////////////////////////////
+LockHelper::LockHelper()
+{
+#ifdef WIN32
+    InitializeCriticalSection(&_crit);
+#else
+    //_crit = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&_crit, &attr);
+    pthread_mutexattr_destroy(&attr);
+#endif
+}
+LockHelper::~LockHelper()
+{
+#ifdef WIN32
+    DeleteCriticalSection(&_crit);
+#else
+    pthread_mutex_destroy(&_crit);
+#endif
+}
+
+void LockHelper::lock()
+{
+#ifdef WIN32
+    EnterCriticalSection(&_crit);
+#else
+    pthread_mutex_lock(&_crit);
+#endif
+}
+void LockHelper::unLock()
+{
+#ifdef WIN32
+    LeaveCriticalSection(&_crit);
+#else
+    pthread_mutex_unlock(&_crit);
+#endif
+}
 
 /**
  * 分割字符串，用通用的默认形式，即，空格类字符作为分割符。
@@ -259,23 +302,55 @@ int parse_params_from_file(const char *fileName, ...)
  * configuration comes form file. also be synchronized with that in file.
  *
  */
-typedef void (*UseConfigValue)(const char* key, const char* value);
+typedef void (*FuncUseConfig)(const char *group, const char *key, const char* value);
 struct ConfigRoom{
+    ConfigRoom(){
+        lastLoadFile = 0;
+    }
+    explicit ConfigRoom(const char *filePath){
+        loadFromFile(filePath);
+    }
+    ~ConfigRoom(){
+    }
+private:
+    ConfigRoom(const ConfigRoom&);
+    ConfigRoom& operator=(const ConfigRoom&);
+public:
     struct StringPair{
         string used;
         string current;
     };
-    map<string, StringPair> allconfigs;
+    map<string, StringPair> allConfigs;
     string configFile;
-    time_t lastReadTime;
+    time_t lastLoadFile;
+    LockHelper mylock;
 
     bool loadFromFile(const char* filePath = NULL);
-    bool isUpdated(const char* key);
-    bool accessValue(const char* key, string& value);
-    bool accessvalue(const char* key, UseConfigValue* funcAddr);
+    //not existing is equal to empty value.
+    bool isUpdated(const char* group, const char* key);
+    void accessValue(const char* group, const char* key, string& value);
+    void accessValue(const char* group, const char* key, FuncUseConfig funcAddr);
 };
 
 ConfigRoom g_Configs;
+template<typename T>
+void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, T& val)
+{
+    string value;
+    cfg->accessValue(group, key, value);
+    if(value != ""){
+        istringstream iss(value);
+        iss >> val;
+    }
+}
+void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, string& val)
+{
+    string value;
+    cfg->accessValue(group, key, value);
+    if(value != ""){
+        val = value;
+    }
+}
 
 static char* getValidString(char *tmpStr)
 {
@@ -300,16 +375,31 @@ static char* getValidString(char *tmpStr)
 
 bool ConfigRoom::loadFromFile(const char* filePath)
 {
-    if(filePath == NULL && configFile.size() == 0){
+    AutoLock lock(mylock);
+    if(configFile.size() == 0 && filePath == NULL){
         fprintf(stderr, "ERROR no config file specified.\n");
         return false;
     }
-    if(configFile != filePath){
+    if(configFile.size() != 0 && configFile != filePath){
         fprintf(stderr, "WARN the current configure file is not used, for being not the same file with initial file. initial: %s, current: %s.\n", configFile.c_str(), filePath);
     }
+    if(configFile.size() == 0){
+        configFile = filePath;
+    }
+    for(map<string, StringPair>::iterator it = allConfigs.begin(); it != allConfigs.end(); it ++){
+        (*it).second.current = "";
+    }
+    struct stat statbuf;
+    if(stat(configFile.c_str(), &statbuf) < 0){
+        lastLoadFile = 0;
+        fprintf(stderr, "WARN the configure file does not exist. file: %s.\n", configFile.c_str());
+        return false;
+    }
+    lastLoadFile = statbuf.st_mtime;
     FILE *fp = fopen(configFile.c_str(), "r");
     if(fp == NULL){
-        fprintf(stderr, "ERROR the configure file is not opened. file: %s.\n", configFile.c_str());
+        fprintf(stderr, "WARN the configure file is not opened. file: %s.\n", configFile.c_str());
+        lastLoadFile = 0;
         return false;
     }
     char groupName[MAX_PATH];
@@ -330,9 +420,93 @@ bool ConfigRoom::loadFromFile(const char* filePath)
             char * validStr = getValidString(validStr + 1);
             if(validStr == NULL) continue;
             strncpy(groupName, validStr, MAX_PATH);
+            continue;
         }
-    
+        char * sepPtr = strchr(validStr, '=');
+        if(sepPtr != NULL){
+            *sepPtr = '\0';
+            allConfigs[(string)groupName + "." + getValidString(validStr)].current = getValidString(sepPtr + 1);
+            continue;
+        }
+        fprintf(stderr, "ERROR unrecognized line: %s.\n", tmpLine);
     }
+    fclose(fp);
 }
 
+bool ConfigRoom::isUpdated(const char* group, const char* key)
+{
+    mylock.lock();
+    time_t lasttime = lastLoadFile;
+    mylock.unLock();
+    struct stat statbuf;
+    if(stat(configFile.c_str(), &statbuf) < 0){
+        if(lasttime == 0) return true;
+        else{
+            this->loadFromFile(configFile.c_str());
+        }
+    }
+    if(lasttime < statbuf.st_mtime){
+        this->loadFromFile(configFile.c_str());
+    }
+    AutoLock lock(mylock);
+    string innerKey = (string)group + "." + key;
+    if(allConfigs.find(innerKey) == allConfigs.end()){
+        return false;
+    }
+    if(allConfigs[innerKey].used == allConfigs[innerKey].current){
+        return false;
+    }
+    return true;
+}
 
+void ConfigRoom::accessValue(const char* group, const char* key, string& value)
+{
+    AutoLock lock(mylock);
+    string innerKey = (string)group + "." + key;
+    if(allConfigs.find(innerKey) == allConfigs.end()){
+        value = "";
+    }
+    value = allConfigs[innerKey].current;
+    allConfigs[innerKey].used = value;
+}
+
+void ConfigRoom::accessValue(const char* group, const char* key, FuncUseConfig funcAddr)
+{
+    string value;
+    accessValue(group, key, value);
+    funcAddr(group, key, value.c_str());
+}
+
+#define TEST_MAIN
+#ifdef TEST_MAIN
+template<typename T>
+void print_config(const char* group, const char *key, const T &val)
+{
+    cout << "new config entry: "<< group<< "." << key<< " = "<< val << ".\n";
+}
+
+void print_config(const char* group, const char *key, const char *value)
+{
+    printf("new config entry: %s.%s = %s.\n", group, key, value);
+}
+int main(int argc, char** args)
+{
+    ConfigRoom cfg(args[1]); 
+    while(true){
+        //cfg.isUpdated("", "");
+        map<string, ConfigRoom::StringPair>::iterator it = cfg.allConfigs.begin();
+        while(it != cfg.allConfigs.end()){
+            string innerKey = it->first;
+            size_t sePos = innerKey.find_first_of(".");
+            string group = innerKey.substr(0, sePos);
+            string key = innerKey.substr(sePos + 1);
+            if(cfg.isUpdated(group.c_str(), key.c_str())){
+                cfg.accessValue(group.c_str(), key.c_str(), print_config);
+            }
+        }
+        sleep(3);
+    }
+    return 0;
+}
+
+#endif
