@@ -96,6 +96,7 @@ void DataBlock::relse()
     }
 }
 
+struct timeval ZERO_TIMEVAL;
 static LoggerId g_BufferLogger = LOG4Z_MAIN_LOGGER_ID;
 ProjectBuffer::BufferConfig ProjectBuffer::bufferConfig;
 unsigned ProjectBuffer::ceilUnitIdx;
@@ -124,6 +125,11 @@ void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
     this->ID = pid;
     this->bFull = false;
     this->bAlloc = true;
+    this->bBampHit = false;
+    this->mainRegStTime.tv_sec = 0;
+    this->mainRegStTime.tv_usec = 0;
+    this->mainRegEdTime.tv_sec = 0;
+    this->mainRegEdTime.tv_usec = 0;
     DataBlock ele;
     ele.m_len = BLOCKSIZE;
     arrUnits.push_back(ele);
@@ -141,29 +147,51 @@ void ProjectBuffer::getData(vector<DataBlock>& vec)
     return;
 }
 
+unsigned ProjectBuffer::getDataLength()
+{
+    AutoLock lock(m_BufferLock);
+    vector<DataBlock>::iterator it = arrUnits.begin();
+    unsigned ret = 0;
+    while(++it != arrUnits.end()){
+        ret += it->m_len;
+    }
+    return 0;
+}
+
 ostream& operator<<(ostream& str, ProjectBuffer::ArrivalRecord rec)
 {
     str<<"(" << rec.seconds<< ", " << rec.unitIdx<< ", "<< rec.offset<<")";
     return str;
 }
-void ProjectBuffer::relse(){
-    ostringstream oss;
-    std::copy(arrArrivalRecords.begin(), arrArrivalRecords.end(), std::ostream_iterator<ProjectBuffer::ArrivalRecord>(oss, "; "));
-    LOGFMT_DEBUG(g_BufferLogger, "PID=%lu release projectBuffer, data arrivals: %s.", this->ID, oss.str().c_str());
+
+bool ProjectBuffer::relse(){
+    AutoLock lock(m_BufferLock);
+    if(mainRegEdTime.tv_sec == 0){
+        return false;
+    }
+
+    if (zsummer::log4z::ILog4zManager::getPtr()->prePushLog(g_BufferLogger, LOG_LEVEL_DEBUG)){
+        ostringstream oss;
+        std::copy(arrArrivalRecords.begin(), arrArrivalRecords.end(), std::ostream_iterator<ProjectBuffer::ArrivalRecord>(oss, "; "));
+        LOGFMT_DEBUG(g_BufferLogger, "PID=%lu release projectBuffer, data arrivals: %s.", this->ID, oss.str().c_str());
+        LOGFMT_DEBUG(g_BufferLogger, "PID=%lu MainReg start %ld %ld; end: %ld %ld.", mainRegStTime.tv_sec, mainRegEdTime.tv_usec, mainRegEdTime.tv_sec, mainRegEdTime.tv_usec);
+        
+    }
+    return true;
 }
 
 /**
  * 返回成功接收的长度.
  *
  */
-unsigned ProjectBuffer::recvData(char *data, unsigned len, time_t curTime)
+unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, time_t curTime)
 {
     AutoLock lock(m_BufferLock);
     unsigned ret = 0;
     if(curTime == 0) curTime = time(NULL);
     unsigned curSize = arrUnits.back().m_len;
-    unsigned size1 = len > BLOCKSIZE - curSize ? BLOCKSIZE - curSize : len;
-    unsigned size2 = len - size1;
+    unsigned size1 = dataLen > BLOCKSIZE - curSize ? BLOCKSIZE - curSize : dataLen;
+    unsigned size2 = dataLen - size1;
     memcpy(arrUnits.back().m_buf + curSize, data, size1);
     ret += size1;
     arrUnits.back().m_len += size1;
@@ -176,13 +204,13 @@ unsigned ProjectBuffer::recvData(char *data, unsigned len, time_t curTime)
             arrUnits.back().m_len += size2;
         }
         else{
-            LOGFMT_INFO(g_BufferLogger, "PID=%lu failed to store data, curBlockCount=%lu, for no DataBlock available.", this->ID, (arrUnits.size() -1));
+            LOGFMT_WARN(g_BufferLogger, "PID=%lu failed to store data, curBlockCount=%u, for no DataBlock available.", this->ID, (arrUnits.size() -1));
         }
     }
     arrArrivalRecords.push_back(ArrivalRecord(curTime, arrUnits.size()-1, arrUnits.back().m_len));
     if(ret > 0){
         if(arrUnits.size() - 1 > ceilUnitIdx || (arrUnits.size() -1 == ceilUnitIdx && arrUnits.back().m_len >= ceilOffset)){
-            LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as the accumulated data is enough.", this->ID);
+            LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as the accumulated data reaches to maximum.", this->ID);
             turnFull();
         }
     }
@@ -225,7 +253,14 @@ bool ProjectBuffer::isFull(time_t curTime)
 
 //////////////////////////////////////////////////////////
 //
-static std::map<unsigned long, ProjectBuffer*> g_mapProjs;
+struct ProjectCheckbook{
+    ProjectCheckbook():
+        prj(NULL), cnt(0)
+    {}
+    ProjectBuffer *prj;
+    int cnt;
+};
+static std::map<unsigned long, ProjectCheckbook> g_mapProjs;
 static std::set<unsigned long> g_setOtherIDs;
 static std::set<unsigned long> g_setFullIDs;
 static LockHelper g_ProjsLocker;
@@ -273,7 +308,7 @@ void notifyProjFinish(unsigned long pid)
 {
     g_ProjsLocker.lock();
     if(g_mapProjs.find(pid) != g_mapProjs.end()){
-        ProjectBuffer *tmp = g_mapProjs[pid];
+        ProjectBuffer *tmp = g_mapProjs[pid].prj;
         tmp->finishRecv();
         g_setOtherIDs.erase(pid);
         g_setFullIDs.insert(pid);
@@ -288,41 +323,66 @@ void notifyProjFinish(unsigned long pid)
  *
  * return 1 if success, otherwise 0.
  */
-int recvProjSegment(unsigned long pid, char* data, unsigned len, bool iswait)
+int recvProjSegment(ProjectSegment param, bool iswait)
 {
     //LOGFMT_TRACE(g_BufferLogger, "PID=%llu receive new data, size=%u.", pid, len);
+    unsigned long &pid = param.pid;
+    char *&data = param.data;
+    unsigned dataLen = param.len;
+    
     g_ProjsLocker.lock();
     if(g_mapProjs.find(pid) == g_mapProjs.end()){
-        g_mapProjs[pid] = new ProjectBuffer(pid);
+        g_mapProjs[pid].prj = new ProjectBuffer(pid);
         g_setOtherIDs.insert(pid);
         LOGFMT_DEBUG(g_BufferLogger, "PID=%lu arrives.", pid);
     }
+    else{
+        //receive one project only by one thread.
+        vector<DataBlock> dataVec;
+        g_mapProjs[pid].prj->getData(dataVec);
+        unsigned offset = 0;
+        for(unsigned idx=0; idx < dataVec.size(); idx ++){
+            offset += dataVec[idx].m_len;
+        }
+        assert(param.offset == UINT_MAX || param.offset == offset);
+
+    }
     assert(g_mapProjs.size() == g_setOtherIDs.size() + g_setFullIDs.size());
     int ret = 1;
-    unsigned wlen = g_mapProjs[pid]->recvData(data, len);
-    if(iswait){
-        while(wlen < len){
+    unsigned wlen = 0;
+    while(true){
+        wlen += g_mapProjs[pid].prj->recvData(data + wlen, dataLen - wlen);
+        if(!iswait || wlen == dataLen) break;
+        if(wlen < dataLen){
             struct timespec tsp;
             makeTimespec(&tsp);
-            tsp.tv_sec += 5;
-            pthread_cond_timedwait(&g_ProjsEmptyCond, &g_ProjsLocker._crit, &tsp);//can't only rely notification from another thread to get condition.
+            tsp.tv_sec += 3;
+            pthread_cond_timedwait(&g_ProjsEmptyCond, &g_ProjsLocker._crit, &tsp);
             if(g_mapProjs.find(pid) == g_mapProjs.end()){
+                LOGFMT_WARN(g_BufferLogger, "PID=%lu the project is removed from map, while filling data to it, total %u, received %u.", pid, dataLen, wlen);
                 ret = 0;
                 break;
             }
-            wlen += g_mapProjs[pid]->recvData(data + wlen, len - wlen);
-                
         }
+    }
+
+    if(wlen == dataLen){
+        if(param.bBampHit){
+            g_mapProjs[pid].prj->setBampHit();
+        }
+    } 
+    else{
+        LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. Total: %u; Received: %u.", pid, dataLen, wlen);
     }
     bool bNotify = false;
     if(ret != 0 && wlen > 0){
-        if(g_mapProjs[pid]->getFull()){
+        if(g_mapProjs[pid].prj->getFull()){
             bNotify = true;
         }
     }
     g_ProjsLocker.unLock();
     if(bNotify) pthread_cond_broadcast(&g_ProjsFullCond);
-    if(wlen != len){
+    if(wlen != dataLen){
         ret = 0;
     }
     return ret;
@@ -334,11 +394,24 @@ static void transferIDs(time_t curTime)
     while(it != g_setOtherIDs.end()){
         std::set<unsigned long>::iterator chit = it ++;
         unsigned long curID = *chit;
-        if(g_mapProjs[curID]->isFull(curTime)){
+        if(g_mapProjs[curID].prj->isFull(curTime)){
             g_setOtherIDs.erase(chit);
             g_setFullIDs.insert(curID);
         }
     }
+}
+
+ProjectBuffer* obtainBuffer(unsigned long pid)
+{
+    g_ProjsLocker.lock();
+    if(g_mapProjs.find(pid) == g_mapProjs.end()){
+        g_ProjsLocker.unLock();
+        return NULL;
+    }
+    ProjectBuffer* ret = g_mapProjs[pid].prj;
+    g_mapProjs[pid].cnt ++;
+    g_ProjsLocker.unLock();
+    return ret;
 }
 
 /**
@@ -372,21 +445,29 @@ ProjectBuffer* obtainFullBufferTimeout(unsigned secs)
         }
         if(it == g_setFullIDs.end()) it = g_setFullIDs.begin();
         lastReturnPid = *it;
-        return g_mapProjs[lastReturnPid];
+        ProjectBuffer* prj = g_mapProjs[lastReturnPid].prj;
+        g_mapProjs[lastReturnPid].cnt ++;
+        return prj;
     }
     else{
         return NULL;
     }
 }
 
-void returnFullBuffer(ProjectBuffer* obtained)
+void returnBuffer(ProjectBuffer* obtained)
 {
     AutoLock mylock(g_ProjsLocker);
-    assert(g_mapProjs.find(obtained->ID) != g_mapProjs.end());
-    assert(g_mapProjs[obtained->ID] == obtained);
-    g_mapProjs.erase(obtained->ID);
-    g_setFullIDs.erase(obtained->ID);
-    delete obtained;
+    unsigned pid = obtained->ID;
+    assert(g_mapProjs.find(pid) != g_mapProjs.end());
+    assert(g_mapProjs[pid].prj == obtained);
+    assert(g_mapProjs[pid].cnt > 0);
+    g_mapProjs[pid].cnt --;
+    if(g_mapProjs[pid].cnt != 0) return; 
+    if(obtained->relse()){
+        g_setFullIDs.erase(obtained->ID);
+        g_mapProjs.erase(obtained->ID);
+        delete obtained;
+    }
 }
 
 bool isAllFinished()

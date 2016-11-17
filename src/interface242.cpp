@@ -26,7 +26,7 @@ using namespace zen4audio;
 
 #define PCM_ONESEC_LEN 16000
 #define PCM_ONESEC_SMPS 8000
-#define POSTVAD_MIN_LEN (PCM_ONESEC_LEN * 10)
+#define POSITIVE_PCM_LEN (PCM_ONESEC_LEN * 10)
 
 //TODO 这两个标记变量需要加锁.
 static bool g_bInitialized = false;
@@ -36,7 +36,8 @@ static pthread_key_t g_RecWavBufsKey;
 static ReceiveResult g_ReportResultAddr;
 
 const char szEngineDir[]="./ioacas/";
-static char szMusicDetectCfg[MAX_PATH] = "./ioacas/Music.cfg";
+static char szMusicDetectCfg[] = "./ioacas/Music.cfg";
+ConfigRoom g_AutoCfg(((string)szEngineDir + "SysFunc.cfg").c_str());
 
 static char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";// save hited project.
 static char g_szAllPrjsDir[MAX_PATH]; //save all projects, when after processing.
@@ -47,9 +48,12 @@ static bool g_bSaveAfterRec=false; // when after processing, for project ID.
 static int g_ThreadNum = 1;
 static pthread_t *g_pthread_id = NULL;
 
+
 //////////////////----music----
 static int g_iMusicPrecent = 50;
+static pthread_mutex_t g_MusicPrecentLock = PTHREAD_MUTEX_INITIALIZER;
 static int g_iVADPrecent = 50;
+static pthread_mutex_t g_VADPrecentLock = PTHREAD_MUTEX_INITIALIZER;
 ///////////////////---lid---
 static bool g_bUseLid=true;
 static bool g_bLidUseVAD=false;
@@ -359,41 +363,32 @@ static void initGlobal(BufferConfig &myBufCfg)
 	spkScoreCfg.m_100Value = 100;
 
 	char szSysCfgFile[MAX_PATH]="";
-	int len =strlen(szEngineDir);
 	char szLangReports[256] = "11->1";
     char szLangReportFilter[256] = "";
-	strcpy(szSysCfgFile, szEngineDir);
-	strcpy(szSysCfgFile+len, "SysFunc.cfg");
-	parse_params_from_file(szSysCfgFile,
-			"BifSkipSameProject", &g_bSaveAfterRec,
-			"SsavePCMTopDir", m_TSI_SaveTopDir,
-            "SsaveAllTopDir", g_szAllPrjsDir,
-            "IthreadNumPerStream", &g_ThreadNum, 
-            //for lid
-			"BifUseLID", &g_bUseLid,
-			"Blid.ifUseVAD", &g_bLidUseVAD,
-			"Blid.ifUseMusicDetect", &g_bLidUseMusicDetect,
-            "IsavedMusicPrecent", &g_iMusicPrecent,
-            "IsavedVadPrecent", &g_iVADPrecent,
-			"SlanguageReports", szLangReports,
-            "SlangReportFilter", szLangReportFilter,
-            //for spk
-            "BifUseSPK", &g_bUseSpk,
-            "Bspk.ifUseVAD", &g_bSpkUseVad,
-            "Bspk.ifUseMusicDetect", &g_bSpkUseMCut,
-            "Fspk.defaultThreshold", &defaultSpkScoreThrd,
-            "FzeroScore", &spkScoreCfg.m_0Value,
-            "FhundredScore", &spkScoreCfg.m_100Value,
-            //for projectBuffer
-			"BifDiscardable", &g_bDiscardable,
-			"IwaitSecondsStep", &(myBufCfg.waitSecondsStep),
-			"IwaitSeconds", &(myBufCfg.waitSeconds),
-			"IwaitLength", &(myBufCfg.waitLength),
-            "IbufferBlockSize", &(myBufCfg.m_uBlockSize),
-            "IbufferBlocksMin", &(myBufCfg.m_uBlocksMin),
-            "IbufferBlocksMax", &(myBufCfg.m_uBlocksMax),
-			NULL
-			);
+    Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
+    Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
+    Config_getValue(&g_AutoCfg, "", "saveAllTopDir", g_szAllPrjsDir);
+    Config_getValue(&g_AutoCfg, "", "threadNumPerStream", g_ThreadNum);
+    Config_getValue(&g_AutoCfg, "lid","ifUseLID", g_bUseLid);
+    Config_getValue(&g_AutoCfg, "lid", "ifUseVAD", g_bLidUseVAD);
+    Config_getValue(&g_AutoCfg, "lid", "ifUseMusicDetect", g_bLidUseMusicDetect);
+    Config_getValue(&g_AutoCfg, "lid", "savedMusicPrecent", g_iMusicPrecent);
+    Config_getValue(&g_AutoCfg, "lid", "savedVadPrecent", g_iVADPrecent);
+    Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
+    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
+    Config_getValue(&g_AutoCfg, "spk", "ifUseSPK", g_bUseSpk);
+    Config_getValue(&g_AutoCfg, "spk", "ifUseVAD", g_bSpkUseVad);
+    Config_getValue(&g_AutoCfg, "spk", "ifUseMusicDetect", g_bSpkUseMCut);
+    Config_getValue(&g_AutoCfg, "spk", "defaultThreshold", defaultSpkScoreThrd);
+    Config_getValue(&g_AutoCfg, "spk", "zeroScore", spkScoreCfg.m_0Value);
+    Config_getValue(&g_AutoCfg, "spk", "hundredScore", spkScoreCfg.m_100Value);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "waitLength", myBufCfg.waitLength);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlockSize", myBufCfg.m_uBlockSize);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMin", myBufCfg.m_uBlocksMin);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMax", myBufCfg.m_uBlocksMax);
 
     myBufCfg.waitLength *= 16000;
 	if (g_ThreadNum <= 0)  g_ThreadNum = 1;
@@ -416,7 +411,7 @@ static void initGlobal(BufferConfig &myBufCfg)
     int verLen = 50;
     GetDLLVersion(strVer, verLen);
     LOG_INFO(g_logger, "version --- "<< strVer);
-	LOG_INFO(g_logger, "szSysCfgFile="<<szSysCfgFile<<"\n"
+	LOG_INFO(g_logger, "configFile="<<g_AutoCfg.configFile.c_str()<<"\n"
 			<<"g_ThreadNum="<<            g_ThreadNum<< "\n"
 			<<"m_TSI_SaveTopDir="<<       m_TSI_SaveTopDir<<"\n"
 			<<"g_bDiscardable="<< g_bDiscardable <<"\n"
@@ -444,6 +439,7 @@ static void initGlobal(BufferConfig &myBufCfg)
 
 }
 
+static void *ioacas_maintain_procedure(void *);
 int InitDLL(int iPriority,
         int iThreadNum,
         int *pThreadCPUID,
@@ -503,6 +499,18 @@ int InitDLL(int iPriority,
 		}
 		pthread_attr_destroy(&threadAttr);
 	}
+    {
+		pthread_attr_t threadAttr;
+		pthread_attr_init(&threadAttr);
+        pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
+        pthread_t mthrdId;
+        int retc = pthread_create(&mthrdId, &threadAttr, ioacas_maintain_procedure, NULL);
+        if(retc != 0){
+            LOG_ERROR(g_logger, "fail to create maintain thread!");
+            exit(1);
+        }
+		pthread_attr_destroy(&threadAttr);
+    }
 
     g_bInitialized = true;
     return 0;
@@ -518,27 +526,23 @@ int SendData2DLL(WavDataUnit *p)
         LOG_WARN(g_logger, szHead<<"fail to receive data as ioacas being uninitialized.");
         return -1;
     }
-	time_t cur_time;
-	time(&cur_time);
-    //维护最近的节目列表, 并过滤节目。.
-	pthread_mutex_lock(&g_lockNewReported);
-	static time_t maintainprojectfilterlasttime = 0;
-	if(maintainprojectfilterlasttime == 0){
-		maintainprojectfilterlasttime = cur_time;
-	}
-	if(cur_time - maintainprojectfilterlasttime > 3600){
-		maintainprojectfilterlasttime = cur_time;
-		maintain_newreported(cur_time, 3600 * 5);
-	}
-	if(NewReportedID.find(p->m_iPCBID) != NewReportedID.end())
-	{
-		pthread_mutex_unlock(&g_lockNewReported);
-		LOG_WARN(g_logger, szHead<< "abandoned for being processed recently.");
-		return -1;
-	}
-	pthread_mutex_unlock(&g_lockNewReported);
 
-    recvProjSegment(p->m_iPCBID, p->m_pData, p->m_iDataLen, !g_bDiscardable);
+    if(g_bSaveAfterRec){
+        pthread_mutex_lock(&g_lockNewReported);
+        if(NewReportedID.find(p->m_iPCBID) != NewReportedID.end())
+        {
+            pthread_mutex_unlock(&g_lockNewReported);
+            LOG_WARN(g_logger, szHead<< "abandoned for being processed recently.");
+            return -1;
+        }
+        pthread_mutex_unlock(&g_lockNewReported);
+    }
+
+    ProjectSegment pseg;
+    pseg.pid = p->m_iPCBID;
+    pseg.data = p->m_pData;
+    pseg.len = p->m_iDataLen;
+    recvProjSegment(pseg, !g_bDiscardable);
     LOG_TRACE(g_logger, szHead<< "have put data to GlobalBuffer.");
     return 0;
 }
@@ -817,6 +821,115 @@ static inline unsigned get_count(){
 }
 #endif
 
+static void vadProcess(RecogThreadSpace &rec, int hVad)
+{
+    char* &pData = rec.projData.m_pData;
+    unsigned &dataLen = rec.projData.m_iDataLen;
+    unsigned long &pid = rec.projData.m_iPCBID;
+    short *recBuf = reinterpret_cast<short*>(pData);
+    unsigned recBufLen = dataLen / sizeof(short);
+	unsigned logLen = 0;
+	char WriteLog[1024];
+    logLen = 0;
+    logLen += sprintf(WriteLog+logLen, "VADREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
+    #ifdef CHECK_PERFOMANCE
+    ostringstream clockoutput("OUTPUTCLOCK ");
+    #endif
+    while(true){
+        if(recBufLen < POSITIVE_PCM_LEN)
+        {
+            sprintf(WriteLog+strlen(WriteLog), "too short ");
+            rec.mcutBufLen = 0;
+            break;
+        }
+        set_count();
+        bool retv = cutVAD(hVad, recBuf, recBufLen, rec.vadBuf, rec.vadBufLen);
+        #ifdef CHECK_PERFOMANCE
+        clockoutput<< "CUTVAD "<< recBufLen << " "<< rec.vadBufLen<< " "<< get_count()<< " ";
+        #endif
+        if(retv){
+        }
+        else{
+            rec.vadBufLen = 0;   
+        }
+        logLen += sprintf(WriteLog + logLen, "VADCutLen=%ds ", rec.vadBufLen / PCM_ONESEC_SMPS);
+        int vadRatio = (1 - (float)rec.vadBufLen / recBufLen) * 100;
+        pthread_mutex_lock(&g_VADPrecentLock);
+        int ivprecent = g_iVADPrecent;
+        pthread_mutex_unlock(&g_VADPrecentLock);
+        if(vadRatio > ivprecent){
+            rec.result.m_iTargetID = 0x01;
+            rec.result.m_iAlarmType = g_uLangServType;
+            rec.result.m_iHarmLevel = 0;
+            rec.result.m_fLikely = vadRatio;
+            rec.result.m_fSegLikely[0] = vadRatio;
+            reportResult(rec.result, WriteLog, logLen);
+        }
+        recBuf = rec.vadBuf;
+        recBufLen = rec.vadBufLen;
+        break;
+    }
+    LOG_INFO(g_logger, WriteLog<< "eop.");
+    #ifdef CHECK_PERFOMANCE
+    LOGFMTI(clockoutput.str().c_str());
+    #endif
+
+}
+
+static void musicProcess(RecogThreadSpace &rec, MscCutHandle hMCut)
+{
+    char* &pData = rec.projData.m_pData;
+    unsigned &dataLen = rec.projData.m_iDataLen;
+    unsigned long &pid = rec.projData.m_iPCBID;
+    short *recBuf = reinterpret_cast<short*>(pData);
+    unsigned recBufLen = dataLen / sizeof(short);
+	unsigned logLen = 0;
+	char WriteLog[1024];
+    logLen = 0;
+    logLen += sprintf(WriteLog+logLen, "MSCREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
+    #ifdef CHECK_PERFOMANCE
+    ostringstream clockoutput("OUTPUTCLOCK ");
+    #endif
+    while(true){
+        if(recBufLen < POSITIVE_PCM_LEN)
+        {
+            sprintf(WriteLog+strlen(WriteLog), "too short ");
+            rec.mcutBufLen = 0;
+            break;
+        }
+
+        set_count();
+        bool retm = cutMusic(hMCut, recBuf, recBufLen, rec.mcutBuf, rec.mcutBufLen);
+        #ifdef CHECK_PERFOMANCE
+        clockoutput<< "CUTMUSIC "<< recBufLen<< " "<< rec.mcutBufLen<< " "<< get_count()<< " ";
+        #endif
+        if(retm){
+        }
+        else{
+            rec.mcutBufLen = 0;
+        }
+        logLen += sprintf(WriteLog + logLen, "MusicCutLen=%ds ", rec.mcutBufLen / PCM_ONESEC_SMPS);
+        int  mscRatio = (1 - (float)rec.mcutBufLen / recBufLen) * 100; 
+        pthread_mutex_lock(&g_MusicPrecentLock);
+        int imprecent = g_iMusicPrecent;
+        pthread_mutex_unlock(&g_MusicPrecentLock);
+        if(imprecent < mscRatio){
+            rec.result.m_iTargetID = 0x02;
+            rec.result.m_iAlarmType = g_uLangServType;
+            rec.result.m_iHarmLevel = 0;
+            rec.result.m_fLikely = mscRatio;
+            rec.result.m_fSegLikely[0] = mscRatio;
+            reportResult(rec.result, WriteLog, logLen);
+        }
+        break;
+    }
+    
+    LOG_INFO(g_logger, WriteLog<< "eop.");
+    #ifdef CHECK_PERFOMANCE
+    LOGFMTI(clockoutput.str().c_str());
+    #endif
+}
+
 static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, int hTLI)
 {
     char* &pData = rec.projData.m_pData;
@@ -832,7 +945,7 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
     while(true){
         short *recBuf = reinterpret_cast<short*>(pData);
         unsigned recBufLen = dataLen / sizeof(short);
-        if(recBufLen < POSTVAD_MIN_LEN)
+        if(recBufLen < POSITIVE_PCM_LEN)
         {
             sprintf(WriteLog+strlen(WriteLog), "too short ");
             rec.mcutBufLen = 0;
@@ -853,7 +966,10 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             }
             logLen += sprintf(WriteLog + logLen, "MusicCutLen=%ds ", rec.mcutBufLen / PCM_ONESEC_SMPS);
             int  mscRatio = (1 - (float)rec.mcutBufLen / recBufLen) * 100; 
-            if(g_iMusicPrecent < mscRatio){
+            pthread_mutex_lock(&g_MusicPrecentLock);
+            int imprecent = g_iMusicPrecent;
+            pthread_mutex_unlock(&g_MusicPrecentLock);
+            if(imprecent < mscRatio){
                 rec.result.m_iTargetID = 0x02;
                 rec.result.m_iAlarmType = g_uLangServType;
                 rec.result.m_iHarmLevel = 0;
@@ -865,7 +981,7 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             recBufLen = rec.mcutBufLen;
         }
 
-        if(recBufLen < POSTVAD_MIN_LEN)
+        if(recBufLen < POSITIVE_PCM_LEN)
         {
             sprintf(WriteLog+strlen(WriteLog), "too short ");
             rec.vadBufLen = 0;
@@ -885,7 +1001,10 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             }
             logLen += sprintf(WriteLog + logLen, "VADCutLen=%ds ", rec.vadBufLen / PCM_ONESEC_SMPS);
             int vadRatio = (1 - (float)rec.vadBufLen / recBufLen) * 100;
-            if(vadRatio > g_iVADPrecent){
+            pthread_mutex_lock(&g_VADPrecentLock);
+            int ivprecent = g_iVADPrecent;
+            pthread_mutex_unlock(&g_VADPrecentLock);
+            if(vadRatio > ivprecent){
                 rec.result.m_iTargetID = 0x01;
                 rec.result.m_iAlarmType = g_uLangServType;
                 rec.result.m_iHarmLevel = 0;
@@ -897,9 +1016,7 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             recBufLen = rec.vadBufLen;
         }
 
-
-
-        if(recBufLen < POSTVAD_MIN_LEN)
+        if(recBufLen < POSITIVE_PCM_LEN)
         {
             sprintf(WriteLog+strlen(WriteLog), "too short ");
             break;
@@ -908,6 +1025,12 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             int nMax;
             float score;
             set_count();
+            const char* debugDir = "ioacas/debug/";
+            if(if_directory_exists(debugDir)){
+                char wholePath[MAX_PATH];
+                sprintf(wholePath, "%sbeforeTLI_%lu", debugDir, pid);
+                save_binary_data(wholePath, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short));
+            }
             scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
             #ifdef CHECK_PERFOMANCE
             clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
@@ -996,6 +1119,7 @@ static void prepare_rec_bufs(const vector<DataBlock> &datavec,
     }
 }
 
+
 void* IoaRegThread(void *param)
 {
     RecogThreadSpace &This_Buf = *(RecogThreadSpace*)param;
@@ -1003,13 +1127,12 @@ void* IoaRegThread(void *param)
     unsigned long &curPid = This_Buf.projData.m_iPCBID;
     unsigned &projLen = This_Buf.projData.m_iDataLen;
 	
-	time_t cur_time;
+	struct timeval cur_time;
 	LOG_INFO(g_logger, "RegThread "<< This_Buf.threadIdx<< " of stream 0 has started ...");
 
     int hTLI;
     MscCutHandle hMCut = NULL;
     int hVAD = -1;
-	//TLI_Open_1(hTLI);
     if(g_bUseLid){
         hTLI = openTLI_dup();
     }
@@ -1025,9 +1148,10 @@ void* IoaRegThread(void *param)
 	while (true)
 	{
         ptrBuf = obtainFullBufferTimeout(-1u);
-		time(&cur_time);
+        gettimeofday(&cur_time, NULL);
 		if (ptrBuf != NULL)
 		{
+            ptrBuf->startMainReg();
             vector<DataBlock> datavec;
             assert(datavec.size() == 0);
 			ptrBuf->getData(datavec);
@@ -1038,10 +1162,17 @@ void* IoaRegThread(void *param)
             This_Buf.result.m_iTargetID = 0;
             This_Buf.result.m_iAlarmType = 0;
 			//for TLI
-			if(g_bUseLid || g_bLidUseMusicDetect || g_bLidUseVAD)
+			if(g_bUseLid)
 			{
-                lidRegProcess(This_Buf, hMCut, hVAD, hTLI);
+                lidRegProcess(This_Buf, NULL, -1, hTLI);
 			}
+
+            if(hMCut != NULL){
+                musicProcess(This_Buf, hMCut);
+            }
+            if(hVAD != -1){
+                vadProcess(This_Buf, hVAD);
+            }
 
             if(g_bUseSpk){
                 
@@ -1050,7 +1181,7 @@ void* IoaRegThread(void *param)
             //保存节目号，用于后面的去重.
 			if(g_bSaveAfterRec){
 				pthread_mutex_lock(&g_lockNewReported);
-				NewReportedID.insert(map<unsigned long,ProjRecord_t>::value_type(curPid, ProjRecord_t("", cur_time)));
+				NewReportedID.insert(map<unsigned long,ProjRecord_t>::value_type(curPid, ProjRecord_t("", cur_time.tv_sec)));
 				pthread_mutex_unlock(&g_lockNewReported);
 			}
             //保存节目数据. --- for debug.
@@ -1072,12 +1203,13 @@ void* IoaRegThread(void *param)
             }
 
             release_rec_bufs();
-			returnFullBuffer(ptrBuf);
+            ptrBuf->finishMainReg();
+			returnBuffer(ptrBuf);
 		}
 		else{
 		}
 	}
-	//TLI_Close_1(hTLI);
+
     if(g_bUseLid) closeTLI_dup(hTLI);
     if(g_bLidUseMusicDetect || g_bSpkUseMCut){
         closeMusicCut(hMCut);
@@ -1086,6 +1218,43 @@ void* IoaRegThread(void *param)
     return NULL;
 }
 
+void *ioacas_maintain_procedure(void *)
+{
+    time_t cur_time;
+    time(&cur_time);
+
+    if(true){
+        //maitain project filter.
+        pthread_mutex_lock(&g_lockNewReported);
+        static time_t projectfilterlasttime = 0;
+        if(cur_time   > 3600 + projectfilterlasttime){
+            projectfilterlasttime = cur_time;
+            maintain_newreported(cur_time, 3600 * 5);
+        }
+        pthread_mutex_unlock(&g_lockNewReported);
+    }
+    if(true){
+        //update some configurations.
+        static time_t lasttime;
+        if(cur_time > 3 + lasttime){
+            lasttime = cur_time;
+            g_AutoCfg.checkAndLoad();
+            if(g_AutoCfg.isUpdated("lid", "savedMusicPrecent")){
+                pthread_mutex_lock(&g_MusicPrecentLock);
+                Config_getValue(&g_AutoCfg, "lid", "savedMusicPrecent", g_iMusicPrecent);
+                pthread_mutex_unlock(&g_MusicPrecentLock);
+            }
+            if(g_AutoCfg.isUpdated("lid", "savedVadPrecent")){
+                pthread_mutex_lock(&g_VADPrecentLock);
+                Config_getValue(&g_AutoCfg, "lid", "savedVadPrecent", g_iVADPrecent);
+                pthread_mutex_unlock(&g_VADPrecentLock);
+            }
+            
+        }
+    }
+    
+    return NULL;
+}
 /////////////////////offline tasks////////////////////
 //TODO 程序框架要升级，保证离线与在线互不影响.
 /**
@@ -1120,7 +1289,11 @@ unsigned  sendOfflineData(const vector<string> & filelist)
         fseek(fp, 44, SEEK_SET);
         while(true){
             size_t rnum = fread(dataBuf, 1, ONEPACKETLEN, fp);
-            recvProjSegment(i, dataBuf, rnum, true);
+            ProjectSegment pseg;
+            pseg.pid = i;
+            pseg.data = dataBuf;
+            pseg.len = rnum;
+            recvProjSegment(pseg, true);
             if(rnum < ONEPACKETLEN) break;
         }
         notifyProjFinish(i);

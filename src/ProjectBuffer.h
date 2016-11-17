@@ -8,10 +8,13 @@
 #ifndef PROJECTBUFFER__H
 #define PROJECTBUFFER__H
 
+#include <sys/time.h>
 #include <pthread.h>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
+#include <ostream>
 
 namespace zen4audio{
 
@@ -56,6 +59,7 @@ struct DataBlock{
     short *m_cnt;
 };
 
+extern struct timeval ZERO_TIMEVAL;
 //extern std::vector<DataUnit*> g_vecFreeBlocks; 
 /**
  *  用于节目缓存的类, 比之前的实现相比，最小化了功能；用到了唯一的内存管理代码，用于缓存空间的计数与控制.
@@ -72,11 +76,40 @@ public:
         setPid(pid, curTime);
     }
     ~ProjectBuffer(){
-        relse();
+        assert(relse());
     }
     void setPid(unsigned long, time_t curTime =0);
-    void relse();
+    time_t getPrjTime(){
+        AutoLock lock(m_BufferLock);
+        return arrArrivalRecords[0].seconds;
+    }
+    void setBampHit(){
+        AutoLock lock(m_BufferLock);
+        this->bBampHit = true;
+    }
+    bool getBampHit(){
+        AutoLock lock(m_BufferLock);
+        return this->bBampHit;
+    }
+    void startMainReg(struct timeval curtime = ZERO_TIMEVAL){
+        //if(memcmp(&curtime, &ZERO_TIMEVAL, sizeof(struct timeval) == 0)){
+        if(curtime.tv_sec == ZERO_TIMEVAL.tv_sec && curtime.tv_usec == ZERO_TIMEVAL.tv_usec){
+            gettimeofday(&curtime, NULL);
+        }
+        AutoLock lock(m_BufferLock);
+        mainRegStTime = curtime;
+    }
+    void finishMainReg(struct timeval curtime = ZERO_TIMEVAL){
+        //if(memcmp(&curtime, &ZERO_TIMEVAL, sizeof(struct timeval) == 0)){
+        if(curtime.tv_sec == ZERO_TIMEVAL.tv_sec && curtime.tv_usec == ZERO_TIMEVAL.tv_usec){
+            gettimeofday(&curtime, NULL);
+        }
+        AutoLock lock(m_BufferLock);
+        mainRegEdTime = curtime;
+    }
+    bool relse();
     void getData(std::vector<DataBlock>& vec);
+    unsigned getDataLength();
     bool isFull(time_t curTime = 0);
     bool getFull(){
         AutoLock lock(m_BufferLock);
@@ -118,7 +151,7 @@ private:
         ArrivalRecord(unsigned long secs, unsigned idx, unsigned offset):
             seconds(secs), unitIdx(idx), offset(offset)
         {}
-        unsigned long seconds;
+        time_t seconds;
         //unsigned totalLen;
         unsigned unitIdx;
         unsigned offset;
@@ -129,8 +162,11 @@ private:
     std::vector<ArrivalRecord> arrArrivalRecords;
     bool bAlloc;
     bool bFull;
+    bool bBampHit;
     unsigned fullUnitIdx;
     unsigned fullOffset;
+    struct timeval mainRegStTime;
+    struct timeval mainRegEdTime;
     static unsigned ceilUnitIdx;
     static unsigned ceilOffset;
 };
@@ -144,12 +180,23 @@ struct BufferConfig: public ProjectBuffer::BufferConfig
 };
 /***************************************section two*********************************************/
 
+struct ProjectSegment{
+    ProjectSegment():
+        pid(0), data(NULL), len(0), offset(UINT_MAX), bBampHit(false)
+    {}
+    unsigned long pid;
+    char *data;
+    unsigned len;
+    unsigned offset;
+    bool bBampHit;
+};
 bool init_bufferglobal(BufferConfig buffConfig);
 void rlse_bufferglobal();
 extern "C" void notifyProjFinish(unsigned long pid);
-int recvProjSegment(unsigned long pid, char* data, unsigned len, bool iswait = false);
+int recvProjSegment(ProjectSegment param, bool iswait = false);
+ProjectBuffer* obtainBuffer(unsigned long pid);
 ProjectBuffer* obtainFullBufferTimeout(unsigned secs = -1);
-void returnFullBuffer(ProjectBuffer* obtained);
+void returnBuffer(ProjectBuffer* obtained);
 extern "C" bool isAllFinished();
 
 }

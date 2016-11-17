@@ -52,7 +52,7 @@ int g_SecondVAD=0;
 int g_bUseDetector=0;
 int g_MaxLIDLen = 3600;
 int g_MinLIDLen = 5;
-unsigned g_nThreadNum = 4;
+unsigned g_nThreadNum = 8;
 const unsigned MAXLINE_LEN = 100;
 
 unsigned countLinesInFile(const char *file)

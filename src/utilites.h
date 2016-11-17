@@ -79,6 +79,7 @@ public:
     LockHelper mylock;
 
     bool loadFromFile(const char* filePath = NULL);
+    void checkAndLoad();
     //not existing is equal to empty value.
     bool isUpdated(const char* group, const char* key);
     void accessValue(const char* group, const char* key, std::string& value);

@@ -389,7 +389,7 @@ bool ConfigRoom::loadFromFile(const char* filePath)
     return true;
 }
 
-bool ConfigRoom::isUpdated(const char* group, const char* key)
+void ConfigRoom::checkAndLoad()
 {
     mylock.lock();
     time_t lasttime = lastLoadFile;
@@ -404,6 +404,9 @@ bool ConfigRoom::isUpdated(const char* group, const char* key)
     if(lasttime < statbuf.st_mtime){
         this->loadFromFile(configFile.c_str());
     }
+}
+bool ConfigRoom::isUpdated(const char* group, const char* key)
+{
     AutoLock lock(mylock);
     string innerKey = (string)group + "." + key;
     if(allConfigs.find(innerKey) == allConfigs.end()){
@@ -450,6 +453,7 @@ int main(int argc, char** args)
     ConfigRoom cfg(args[1]); 
     while(true){
         //cfg.isUpdated("", "");
+        cfg.checkAndLoad();
         map<string, ConfigRoom::StringPair>::iterator it = cfg.allConfigs.begin();
         while(it != cfg.allConfigs.end()){
             string innerKey = it->first;

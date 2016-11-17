@@ -530,10 +530,10 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-    while(true){
+    do{
         interactWithMe();
         send_project_parallel(parallelNum);
-    }
+    }while(g_bNonStop);
     struct timeval tv;
     tv.tv_sec = 0;
     tv.tv_usec = 0;
