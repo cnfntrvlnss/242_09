@@ -30,11 +30,12 @@ LockHelper::LockHelper()
     InitializeCriticalSection(&_crit);
 #else
     //_crit = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&_crit, &attr);
-    pthread_mutexattr_destroy(&attr);
+    //pthread_mutexattr_t attr;
+    //pthread_mutexattr_init(&attr);
+    //pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    //pthread_mutex_init(&_crit, &attr);
+    //pthread_mutexattr_destroy(&attr);
+    pthread_mutex_init(&_crit, NULL);
 #endif
 }
 LockHelper::~LockHelper()
@@ -369,7 +370,7 @@ static char* getValidString(char *tmpStr)
     }
     *(lastPtr + 1) = '\0';
     
-    while(isspace(*tmpStr)) tmpStr --;
+    while(isspace(*tmpStr)) tmpStr ++;
     return tmpStr;
 }
 
@@ -407,7 +408,7 @@ bool ConfigRoom::loadFromFile(const char* filePath)
     char tmpLine[MAX_LINE];
     while(fgets(tmpLine, MAX_LINE, fp) != NULL){
         char *validStr = getValidString(tmpLine);
-        if(validStr == NULL) return NULL;
+        if(validStr == NULL) continue;
         char *comSt = strchr(validStr, '#');
         if(comSt != NULL) *comSt = '\0';
         if(*validStr == '['){
@@ -417,7 +418,7 @@ bool ConfigRoom::loadFromFile(const char* filePath)
                 continue;
             }
             *closePairPtr = '\0';
-            char * validStr = getValidString(validStr + 1);
+            validStr = getValidString(validStr + 1);
             if(validStr == NULL) continue;
             strncpy(groupName, validStr, MAX_PATH);
             continue;
@@ -431,6 +432,7 @@ bool ConfigRoom::loadFromFile(const char* filePath)
         fprintf(stderr, "ERROR unrecognized line: %s.\n", tmpLine);
     }
     fclose(fp);
+    return true;
 }
 
 bool ConfigRoom::isUpdated(const char* group, const char* key)
@@ -440,8 +442,8 @@ bool ConfigRoom::isUpdated(const char* group, const char* key)
     mylock.unLock();
     struct stat statbuf;
     if(stat(configFile.c_str(), &statbuf) < 0){
-        if(lasttime == 0) return true;
-        else{
+        statbuf.st_mtime = 0;
+        if(lasttime !=0){
             this->loadFromFile(configFile.c_str());
         }
     }
@@ -477,7 +479,7 @@ void ConfigRoom::accessValue(const char* group, const char* key, FuncUseConfig f
     funcAddr(group, key, value.c_str());
 }
 
-#define TEST_MAIN
+//#define TEST_MAIN
 #ifdef TEST_MAIN
 template<typename T>
 void print_config(const char* group, const char *key, const T &val)
@@ -503,6 +505,10 @@ int main(int argc, char** args)
             if(cfg.isUpdated(group.c_str(), key.c_str())){
                 cfg.accessValue(group.c_str(), key.c_str(), print_config);
             }
+            it ++;
+        }
+        if(cfg.isUpdated("lid", "ifUseLID")){
+            cfg.accessValue("lid", "ifUseLID", print_config);
         }
         sleep(3);
     }
