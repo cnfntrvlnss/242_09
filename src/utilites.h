@@ -11,8 +11,7 @@
 #include <vector>
 #include <string>
 #include<iostream>
-using namespace std;
-using namespace std;
+#include <map>
 
 #include <stdio.h>
 
@@ -48,6 +47,59 @@ private:
     LockHelper & _lock;
 };
 
+/////////////////////////////////////////////////
+//config file
+////////////////////////////////////////////////
+int parse_params_from_file(const char *fileName, ...);
+/**
+ * configuration comes form file. also be synchronized with that in file.
+ *
+ */
+typedef void (*FuncUseConfig)(const char *group, const char *key, const char* value);
+struct ConfigRoom{
+    ConfigRoom(){
+        lastLoadFile = 0;
+    }
+    explicit ConfigRoom(const char *filePath){
+        loadFromFile(filePath);
+    }
+    ~ConfigRoom(){
+    }
+private:
+    ConfigRoom(const ConfigRoom&);
+    ConfigRoom& operator=(const ConfigRoom&);
+public:
+    struct StringPair{
+        std::string used;
+        std::string current;
+    };
+    std::map<std::string, StringPair> allConfigs;
+    std::string configFile;
+    time_t lastLoadFile;
+    LockHelper mylock;
+
+    bool loadFromFile(const char* filePath = NULL);
+    //not existing is equal to empty value.
+    bool isUpdated(const char* group, const char* key);
+    void accessValue(const char* group, const char* key, std::string& value);
+    void accessValue(const char* group, const char* key, FuncUseConfig funcAddr);
+};
+
+template<typename T>
+void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, T& val)
+{
+    std::string value;
+    cfg->accessValue(group, key, value);
+    if(value != ""){
+        std::istringstream iss(value);
+        iss >> val;
+    }
+}
+void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, std::string& val);
+
+///////////////////////////////////////////////
+// string and path
+///////////////////////////////////////////////
 #define MAX_PATH 512
 /** 用于debug输出数组数组变量。
  *
@@ -72,9 +124,8 @@ inline std::string int2str(int i){
 	sprintf(temp, "%d", i);
 	return std::string(temp);
 }
-vector<string> split(const string& s);
-vector<string> split(const string& s, const string& delim,
-		const bool keep_empty = true);
+std::vector<std::string> split(const std::string& s);
+std::vector<std::string> split(const std::string& s, const std::string& delim, const bool keep_empty = true);
 
 inline std::string concatePath(const char* path, const char* name)
 {
@@ -98,8 +149,7 @@ inline std::string getBasename(const char* path)
     return std::string(path, psep);
 }
 
-vector<string> loadFileList(const char *listfile);
-int parse_params_from_file(const char *fileName, ...);
+std::vector<std::string> loadFileList(const char *listfile);
 bool make_directorys(const char *mypath);
 
 typedef bool (*FuncProcessFile)(const char*, const char*);

@@ -91,7 +91,7 @@ void DataBlock::relse()
         (*m_cnt) --;
         if(*m_cnt == 0){
             myFree(static_cast<DataUnit*>(m_buf));
-            free(m_cnt);
+            delete m_cnt;
         }
     }
 }
@@ -176,7 +176,7 @@ unsigned ProjectBuffer::recvData(char *data, unsigned len, time_t curTime)
             arrUnits.back().m_len += size2;
         }
         else{
-            LOGFMT_INFO(g_BufferLogger, "PID=%lu failed to store data, curBlockCount=%u, for no DataBlock available.", this->ID, (arrUnits.size() -1));
+            LOGFMT_INFO(g_BufferLogger, "PID=%lu failed to store data, curBlockCount=%lu, for no DataBlock available.", this->ID, (arrUnits.size() -1));
         }
     }
     arrArrivalRecords.push_back(ArrivalRecord(curTime, arrUnits.size()-1, arrUnits.back().m_len));

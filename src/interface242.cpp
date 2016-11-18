@@ -580,17 +580,17 @@ int AddCfg(unsigned int id,
              return -30;   
         }
         fseek(fp, 0, SEEK_END);
-        unsigned len = ftell(fp);
+        unsigned uLen = ftell(fp);
         fseek(fp, 0, SEEK_SET);
-        char *pData = new char[len];
+        char *pData = new char[uLen];
         if(pData == NULL){
-            LOGFMT_ERROR(g_logger, "AddCfg failed to allocate memory, size: %u", len);
+            LOGFMT_ERROR(g_logger, "AddCfg failed to allocate memory, size: %u", uLen);
             fclose(fp);
             return -40;
         }
-        unsigned rlen = fread(pData, 1, len, fp);
+        unsigned rlen = fread(pData, 1, uLen, fp);
         fclose(fp);
-        return AddCfgByBuf(pData, len, id, iType, iHarmLevel);
+        return AddCfgByBuf(pData, uLen, id, iType, iHarmLevel);
     }
     return 0;
 }
@@ -724,11 +724,12 @@ bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir,
 
 bool saveWave(char *pData, unsigned len, const char *saveFileName)
 {
-    bool ret = false;
     FILE *fp = fopen(saveFileName, "ab");
     if(fp == NULL){
         LOG_WARN(g_logger, "fail to open file "<< saveFileName<< " error: "<< strerror(errno));
+        return false;
     }
+    bool ret = false;
     PCM_HEADER pcmheader;
     initialize_wave_header(&pcmheader, len);
     int retw = fwrite(&pcmheader, sizeof(PCM_HEADER), 1, fp);
@@ -816,7 +817,7 @@ static inline unsigned get_count(){
 }
 #endif
 
-static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle hVAD, int hTLI)
+static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, int hTLI)
 {
     char* &pData = rec.projData.m_pData;
     unsigned &dataLen = rec.projData.m_iDataLen;
@@ -871,7 +872,7 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, VADHandle h
             break;
         }
 
-        if(hVAD != NULL){
+        if(hVAD != -1){
             set_count();
             bool retv = cutVAD(hVAD, recBuf, recBufLen, rec.vadBuf, rec.vadBufLen);
             #ifdef CHECK_PERFOMANCE
@@ -1007,7 +1008,7 @@ void* IoaRegThread(void *param)
 
     int hTLI;
     MscCutHandle hMCut = NULL;
-    VADHandle hVAD = NULL;
+    int hVAD = -1;
 	//TLI_Open_1(hTLI);
     if(g_bUseLid){
         hTLI = openTLI_dup();
@@ -1018,7 +1019,7 @@ void* IoaRegThread(void *param)
     }
     if(g_bLidUseVAD){
         hVAD = openOneVAD(szLIDVADCfg);
-        assert(hVAD != NULL);
+        assert(hVAD != -1);
     }
     ProjectBuffer *ptrBuf;
 	while (true)
@@ -1060,7 +1061,7 @@ void* IoaRegThread(void *param)
                 if(!saveWave(projData, projLen, savedfile)){
                 }
                 //若子目录存在，才写相应的中间处理语音数据.
-                if(hVAD != NULL){
+                if(hVAD != -1){
                     gen_spk_save_file(savedfile, g_szAllPrjsDir, "vadcutdir", curPid, NULL, NULL);
                     saveWave((char*)This_Buf.vadBuf, This_Buf.vadBufLen * sizeof(short), savedfile);
                 }

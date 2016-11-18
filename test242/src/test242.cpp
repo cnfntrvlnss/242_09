@@ -123,7 +123,7 @@ int receive_result(unsigned int iModuleID, CDLLResult *res)
     map<unsigned long long, ProjInfo>::iterator it = g_mId2Infos.find(res->m_pDataUnit[0]->m_iPCBID);
     if(it == g_mId2Infos.end()){
         pthread_mutex_unlock(&g_ProjIdsLock);
-        fprintf(stderr, "ERROR miss project information for retrival result of ioacas.\n");
+        fprintf(stderr, "WARN miss project information for retrival result of ioacas.\n");
         return 0;
     }
     ProjInfo curobj = it->second;
@@ -334,6 +334,9 @@ void send_project_parallel(int paranum)
 {
     if(paranum < 1) return;
     g_iterProjInfo.open(g_AudioDir.c_str());
+    pthread_mutex_lock(&g_ProjIdsLock);
+    g_mId2Infos.clear();
+    pthread_mutex_unlock(&g_ProjIdsLock);
     pthread_t *allthds = (pthread_t*)malloc(paranum * sizeof(pthread_t));
     for(int i=0; i<paranum; i++){
         int crtret = pthread_create(&(allthds[i]), NULL, sendProjectProcess, NULL);
@@ -350,7 +353,7 @@ void send_project_parallel(int paranum)
             printf("fail to join thread: idx %d", i);
         }
     }
-    g_iterProjInfo.~ProjInfoIter();
+    //g_iterProjInfo.~ProjInfoIter();
     free(allthds);
 }
 
@@ -476,8 +479,9 @@ int main(int argc, char* argv[])
 	}
     const char *szHelp = " usage: program -s -d <wavedir> -p <threads> -k <result file>";
     map<char, string> allopts;
-    fetch_all_options(argc, argv, "sd:p:k:", allopts, szHelp);
+    fetch_all_options(argc, argv, "bsd:p:k:", allopts, szHelp);
     int parallelNum = 1;
+    bool g_bNonStop = false;
     char sendInfoFile[MAX_PATH];
     sprintf(sendInfoFile, "%s", "result.txt");
     g_AudioDir = "TestWave";
@@ -497,10 +501,14 @@ int main(int argc, char* argv[])
     if(allopts.find('s') != allopts.end()){
         g_bSingleProjectMode = true;
     }
+    if(allopts.find('b') != allopts.end()){
+        g_bNonStop = true;
+    }
     //LOGI("-----<<<<<>>>>>-----\nWaveDir: "<< rootDir<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile);
     ostringstream oss;
     oss<<"-----<<<<<>>>>>-----\nWaveDir: "<< g_AudioDir.c_str()<< "\nSendingThreadNum: "<< parallelNum<< "\nresultfile: "<< sendInfoFile<< endl;
     oss<< "singleProjectMode: "<< g_bSingleProjectMode<< endl;
+    oss<< "nonStop: "<< g_bNonStop<< endl;
     printf(oss.str().c_str());
 
     g_fpRes = fopen(sendInfoFile, "w");
@@ -522,8 +530,10 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-    interactWithMe();
-    send_project_parallel(parallelNum);
+    while(true){
+        interactWithMe();
+        send_project_parallel(parallelNum);
+    }
     struct timeval tv;
     tv.tv_sec = 0;
     tv.tv_usec = 0;

@@ -123,7 +123,7 @@ private:
         unsigned unitIdx;
         unsigned offset;
     };
-    friend ostream& operator<<(ostream&, ArrivalRecord);
+    friend std::ostream& operator<<(std::ostream&, ArrivalRecord);
     LockHelper m_BufferLock;
     std::vector<DataBlock> arrUnits;
     std::vector<ArrivalRecord> arrArrivalRecords;

@@ -8,7 +8,15 @@
 #ifndef MUSICDETECT_H
 #define	MUSICDETECT_H
 
+#ifdef WIN32
+#ifdef DLLMUSICDETECT_EXPORTS
+#define MUSIC_DETECT_API __declspec(dllexport)
+#else
+#define MUSIC_DETECT_API __declspec(dllimport)
+#endif
+#else
 #define MUSIC_DETECT_API
+#endif
 
 extern "C"
 {

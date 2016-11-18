@@ -299,60 +299,14 @@ int parse_params_from_file(const char *fileName, ...)
 	return idx;
 }
 
-/**
- * configuration comes form file. also be synchronized with that in file.
- *
- */
-typedef void (*FuncUseConfig)(const char *group, const char *key, const char* value);
-struct ConfigRoom{
-    ConfigRoom(){
-        lastLoadFile = 0;
-    }
-    explicit ConfigRoom(const char *filePath){
-        loadFromFile(filePath);
-    }
-    ~ConfigRoom(){
-    }
-private:
-    ConfigRoom(const ConfigRoom&);
-    ConfigRoom& operator=(const ConfigRoom&);
-public:
-    struct StringPair{
-        string used;
-        string current;
-    };
-    map<string, StringPair> allConfigs;
-    string configFile;
-    time_t lastLoadFile;
-    LockHelper mylock;
-
-    bool loadFromFile(const char* filePath = NULL);
-    //not existing is equal to empty value.
-    bool isUpdated(const char* group, const char* key);
-    void accessValue(const char* group, const char* key, string& value);
-    void accessValue(const char* group, const char* key, FuncUseConfig funcAddr);
-};
-
-ConfigRoom g_Configs;
-template<typename T>
-void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, T& val)
+void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, std::string& val)
 {
-    string value;
-    cfg->accessValue(group, key, value);
-    if(value != ""){
-        istringstream iss(value);
-        iss >> val;
-    }
-}
-void Config_getValue(ConfigRoom *cfg, const char *group, const char *key, string& val)
-{
-    string value;
+    std::string value;
     cfg->accessValue(group, key, value);
     if(value != ""){
         val = value;
     }
 }
-
 static char* getValidString(char *tmpStr)
 {
     if(tmpStr[0] == '\0') return NULL;

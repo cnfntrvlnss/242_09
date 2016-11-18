@@ -9,14 +9,13 @@
 
 #include "dllVAD.h"
 
-typedef void* VADHandle;
-VADHandle openOneVAD(char *cfgFile);
-void closeOneVAD(VADHandle hdl);
+int openOneVAD(char *cfgFile);
+void closeOneVAD(int hdl);
 
-inline bool cutVAD(VADHandle hdl, short* inputBuf, unsigned inputLen, short* &outputBuf, unsigned &outputLen)
+inline bool cutVAD(int hdl, short* inputBuf, unsigned inputLen, short* &outputBuf, unsigned &outputLen)
 {
     int oLen;
-    ExtractSpeechBuf(inputBuf, inputLen, outputBuf, oLen);
+    ExtractSpeechBuf(hdl, inputBuf, inputLen, outputBuf, oLen);
     outputLen = oLen;
     return true;
 }
