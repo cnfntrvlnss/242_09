@@ -83,9 +83,15 @@ public:
         AutoLock lock(m_BufferLock);
         return arrArrivalRecords[0].seconds;
     }
-    void setBampHit(){
+    unsigned getBampEndPos(){
         AutoLock lock(m_BufferLock);
-        this->bBampHit = true;
+        return this->uBampEnd;   
+    }
+    void setBampResult(unsigned segSt, unsigned len, bool bHit){
+        AutoLock lock(m_BufferLock);
+        assert(segSt == this->uBampEnd);
+        uBampEnd += len;
+        if(bHit) this->bBampHit = true;
     }
     bool getBampHit(){
         AutoLock lock(m_BufferLock);
@@ -163,6 +169,7 @@ private:
     bool bAlloc;
     bool bFull;
     bool bBampHit;
+    unsigned uBampEnd;
     unsigned fullUnitIdx;
     unsigned fullOffset;
     struct timeval mainRegStTime;
@@ -182,13 +189,11 @@ struct BufferConfig: public ProjectBuffer::BufferConfig
 
 struct ProjectSegment{
     ProjectSegment():
-        pid(0), data(NULL), len(0), offset(UINT_MAX), bBampHit(false)
+        pid(0), data(NULL), len(0)
     {}
     unsigned long pid;
     char *data;
     unsigned len;
-    unsigned offset;
-    bool bBampHit;
 };
 bool init_bufferglobal(BufferConfig buffConfig);
 void rlse_bufferglobal();

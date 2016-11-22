@@ -36,6 +36,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <cassert>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -46,47 +47,67 @@
 #include "log4z.h"
 extern zsummer::log4z::ILog4zManager *g_Log4zManager;
 extern LoggerId g_logger;
+extern ConfigRoom g_AutoCfg;
 
 #define MAX_PATH 512
 
+#define PCM_ONESEC_LEN 16000
+#define PCM_ONESEC_SMPS 8000
+#define POSITIVE_PCM_LEN (PCM_ONESEC_LEN * 10)
 
-typedef struct{
-	float m_0Value;
-	float  m_100Value;
-	float m_maxValue;// in term of original score.
-} ScoreConfig;
-typedef int (*TransScore)(float);
-TransScore getScoreFunc(ScoreConfig *);
 
-/****************
- * 多个线程为生产者，多个线程为消费者，队列容量不设限。
- *
- *
- */
-typedef struct Element_T{
-    void *data;
-    struct Element_T *next;
-}E_T;
+char* GetLocalIP();
+bool if_directory_exists(const char *dir, bool bForce = false);
+int save_binary_data(const char *filePath, const void* ptr, size_t num, ...);
 
-typedef struct Queue_T{
-    E_T *head;
-    pthread_mutex_t headMut; // for head and its pointed struct.
-    pthread_cond_t headCnd; // for head changing form null to not-null.
-    E_T *tail;
-    pthread_mutex_t tailMut;//for tail and its pointed struct.
-    pthread_cond_t tailCnd;
-}MMQ_T;
+bool saveWave(char *pData, unsigned len, const char *saveFileName);
+typedef struct ProjectRecord{
+	ProjectRecord(const char *filepath="", time_t timemark = 0){
+		if(timemark == 0){
+			this->timemark = time(NULL);
+		}
+		else{
+			this->timemark = timemark;
+		}
+		this->fp = NULL;
+		if(strlen(filepath) > 0){
+			if(strlen(filepath) > MAX_PATH){
+				this->filename[0] = 0;
+			}
+			else{
+				sprintf(this->filename, "%s", filepath);
+			}
+			fp = fopen(filepath, "a");
+			if(fp == NULL){
+				LOG_WARN(g_logger, "fail to open file "<<filepath<<"; error: "<< strerror(errno));
+			}
+			else{
+			LOG_DEBUG(g_logger, "have open file "<<filepath);
+			}
+		}
+	}
+	~ProjectRecord(){
+		if(fp != NULL){
+			fclose(fp);
+			LOG_DEBUG(g_logger, "have closed file "<<filename);
+		}
+	}
+	FILE *fp;
+	time_t timemark;
+	char filename[MAX_PATH];
+}ProjRecord_t;
 
-#define MMQ_T_INITCOPY  {0,PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER}
+extern map<unsigned long,ProjRecord_t> NewReportedID;
+extern pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
+//for dubug NewReportedID
+inline void debugstring_newreported(const char * head)
+{
+	char tmpcz[500];
+	sprintf(tmpcz, "%s, newreported [%lu] ", head, NewReportedID.size());
+	string tmpStr = tmpcz;
+	LOG_DEBUG(g_logger, tmpStr.c_str());
+}
 
-/**
- * return 1 if success to retrieve data, or 0.
- */
-int mmq_take(MMQ_T *pqu, void **ppdata);
-int mmq_takew(MMQ_T *pqu, void **ppdata);
-
-void mmq_put(MMQ_T *pqu, void *pdata);
-
-unsigned mmq_size(MMQ_T *pqu);
+void maintain_newreported(time_t curtime, unsigned seconds);
 
 # endif  

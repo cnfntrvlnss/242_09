@@ -134,7 +134,7 @@ void scoreTLI_dup(int hdl, short *pcmData, int pcmLen, int &resID, float &resSco
     int nMaxSec = 3600;
     int nMinSec = 5;
     resID = -1;
-    resScore = -1000;
+    resScore = 0.0;
     int err = TLI_Recognize(hdl, g_pnAllTemplateIDs, g_nTemplateNum, reinterpret_cast<char*>(pcmData), pcmLen * sizeof(short), nMinSec, nMaxSec);
     if(err != 0){
         if(err == -1){

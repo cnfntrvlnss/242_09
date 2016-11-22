@@ -126,6 +126,7 @@ void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
     this->bFull = false;
     this->bAlloc = true;
     this->bBampHit = false;
+    this->uBampEnd = 0;
     this->mainRegStTime.tv_sec = 0;
     this->mainRegStTime.tv_usec = 0;
     this->mainRegEdTime.tv_sec = 0;
@@ -261,8 +262,9 @@ struct ProjectCheckbook{
     int cnt;
 };
 static std::map<unsigned long, ProjectCheckbook> g_mapProjs;
-static std::set<unsigned long> g_setOtherIDs;
+static std::set<unsigned long> g_setPrevFullIDs;
 static std::set<unsigned long> g_setFullIDs;
+static std::set<unsigned long> g_setPostFullIDs;
 static LockHelper g_ProjsLocker;
 static pthread_cond_t g_ProjsFullCond;
 static pthread_cond_t g_ProjsEmptyCond;
@@ -297,10 +299,11 @@ bool init_bufferglobal(BufferConfig buffConfig)
 void rlse_bufferglobal()
 {
     AutoLock myLock(g_ProjsLocker);
-    assert(g_mapProjs.size() == g_setOtherIDs.size() + g_setFullIDs.size());
+    assert(g_mapProjs.size() == g_setPrevFullIDs.size() + g_setFullIDs.size() + g_setPostFullIDs.size());
 
     g_mapProjs.clear();
     g_setFullIDs.clear();
+    g_setPostFullIDs.clear();
     LOGFMT_DEBUG(g_BufferLogger, "rlse_bufferglobal finished.");
 }
 
@@ -310,10 +313,10 @@ void notifyProjFinish(unsigned long pid)
     if(g_mapProjs.find(pid) != g_mapProjs.end()){
         ProjectBuffer *tmp = g_mapProjs[pid].prj;
         tmp->finishRecv();
-        g_setOtherIDs.erase(pid);
+        g_setPrevFullIDs.erase(pid);
         g_setFullIDs.insert(pid);
     }
-    assert(g_mapProjs.size() == g_setOtherIDs.size() + g_setFullIDs.size());
+    assert(g_mapProjs.size() == g_setPrevFullIDs.size() + g_setFullIDs.size() + g_setPostFullIDs.size());
     g_ProjsLocker.unLock();
     pthread_cond_broadcast(&g_ProjsFullCond);
     LOGFMT_DEBUG(g_BufferLogger, "rlse_bufferglobal finished.");
@@ -322,6 +325,7 @@ void notifyProjFinish(unsigned long pid)
 /**
  *
  * return 1 if success, otherwise 0.
+ * TODO pass out ProjectBuffer object by adding one parammeter.
  */
 int recvProjSegment(ProjectSegment param, bool iswait)
 {
@@ -333,21 +337,15 @@ int recvProjSegment(ProjectSegment param, bool iswait)
     g_ProjsLocker.lock();
     if(g_mapProjs.find(pid) == g_mapProjs.end()){
         g_mapProjs[pid].prj = new ProjectBuffer(pid);
-        g_setOtherIDs.insert(pid);
+        g_setPrevFullIDs.insert(pid);
         LOGFMT_DEBUG(g_BufferLogger, "PID=%lu arrives.", pid);
     }
     else{
         //receive one project only by one thread.
         vector<DataBlock> dataVec;
         g_mapProjs[pid].prj->getData(dataVec);
-        unsigned offset = 0;
-        for(unsigned idx=0; idx < dataVec.size(); idx ++){
-            offset += dataVec[idx].m_len;
-        }
-        assert(param.offset == UINT_MAX || param.offset == offset);
-
     }
-    assert(g_mapProjs.size() == g_setOtherIDs.size() + g_setFullIDs.size());
+    assert(g_mapProjs.size() == g_setPrevFullIDs.size() + g_setFullIDs.size() + g_setPostFullIDs.size());
     int ret = 1;
     unsigned wlen = 0;
     while(true){
@@ -367,9 +365,6 @@ int recvProjSegment(ProjectSegment param, bool iswait)
     }
 
     if(wlen == dataLen){
-        if(param.bBampHit){
-            g_mapProjs[pid].prj->setBampHit();
-        }
     } 
     else{
         LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. Total: %u; Received: %u.", pid, dataLen, wlen);
@@ -390,12 +385,12 @@ int recvProjSegment(ProjectSegment param, bool iswait)
 
 static void transferIDs(time_t curTime)
 {
-    std::set<unsigned long>::iterator it = g_setOtherIDs.begin();
-    while(it != g_setOtherIDs.end()){
+    std::set<unsigned long>::iterator it = g_setPrevFullIDs.begin();
+    while(it != g_setPrevFullIDs.end()){
         std::set<unsigned long>::iterator chit = it ++;
         unsigned long curID = *chit;
         if(g_mapProjs[curID].prj->isFull(curTime)){
-            g_setOtherIDs.erase(chit);
+            g_setPrevFullIDs.erase(chit);
             g_setFullIDs.insert(curID);
         }
     }
@@ -447,6 +442,8 @@ ProjectBuffer* obtainFullBufferTimeout(unsigned secs)
         lastReturnPid = *it;
         ProjectBuffer* prj = g_mapProjs[lastReturnPid].prj;
         g_mapProjs[lastReturnPid].cnt ++;
+        g_setPostFullIDs.insert(*it);
+        g_setFullIDs.erase(*it);
         return prj;
     }
     else{
@@ -457,14 +454,16 @@ ProjectBuffer* obtainFullBufferTimeout(unsigned secs)
 void returnBuffer(ProjectBuffer* obtained)
 {
     AutoLock mylock(g_ProjsLocker);
-    unsigned pid = obtained->ID;
+    unsigned long pid = obtained->ID;
     assert(g_mapProjs.find(pid) != g_mapProjs.end());
     assert(g_mapProjs[pid].prj == obtained);
     assert(g_mapProjs[pid].cnt > 0);
     g_mapProjs[pid].cnt --;
     if(g_mapProjs[pid].cnt != 0) return; 
     if(obtained->relse()){
-        g_setFullIDs.erase(obtained->ID);
+        g_setPostFullIDs.erase(obtained->ID);
+        assert(g_setFullIDs.find(obtained->ID) == g_setFullIDs.end());
+        assert(g_setPrevFullIDs.find(obtained->ID) == g_setPrevFullIDs.end());
         g_mapProjs.erase(obtained->ID);
         delete obtained;
     }

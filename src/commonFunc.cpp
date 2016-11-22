@@ -34,124 +34,127 @@ zsummer::log4z::ILog4zManager* initLog4z()
 
 zsummer::log4z::ILog4zManager *g_Log4zManager = initLog4z();
 
-static ScoreConfig g_cfg;
-static char g_init = 0;
-static int trans_score(float f)
-{
-	if(f > g_cfg.m_maxValue) f = g_cfg.m_maxValue;
-	return (f - g_cfg.m_0Value) * ((100) / (g_cfg.m_100Value - g_cfg.m_0Value));
-}
-TransScore getScoreFunc(ScoreConfig *param)
-{
-	if(param == NULL && g_init == 0){
-		g_cfg.m_0Value = 0.0;
-		g_cfg.m_100Value = 100.0;
-		g_cfg.m_maxValue = 100.0;
-	}
-	else if(param != NULL){
-		g_init = 1;
-		g_cfg = *param;
-	}
-	return trans_score;
-}
+char* GetLocalIP()    
+{          
+	int MAXINTERFACES=16;    
+    static char retIP[50];
+    if(retIP[0] != '\0') return retIP;
+	const char *ip = "127.0.0.1";    
+	int fd, intrface;      
+	struct ifreq buf[MAXINTERFACES];      
+	struct ifconf ifc;      
+	int thrdNum = 0;
 
-////////////////////////////////////////////////
-unsigned mmq_size(MMQ_T *pqu)
+	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) >= 0)      
+	{      
+		ifc.ifc_len = sizeof(buf);      
+		ifc.ifc_buf = (caddr_t)buf;      
+		if (!ioctl(fd, SIOCGIFCONF, (char *)&ifc))      
+		{      
+			intrface = ifc.ifc_len / sizeof(struct ifreq);      
+
+			while (intrface-- > 0)      
+			{      
+				if (!(ioctl (fd, SIOCGIFADDR, (char *) &buf[intrface])))      
+				{      
+					ip=(inet_ntoa(((struct sockaddr_in*)(&buf[intrface].ifr_addr))->sin_addr));      
+					//fetch management ip. determined by wheath the third part is even.
+					if(strcmp(ip, "127.0.0.1") == 0) continue;
+					if(sscanf(ip, "%*d.%*d.%d.%*d", &thrdNum) != 1){
+						continue;
+					}
+                    if(thrdNum %2 == 0){
+                      strncpy(retIP, ip, 50);
+                      break;       
+                    }
+				}                          
+			}    
+		}      
+		close (fd);
+	}  
+	return retIP; 
+} 
+
+bool if_directory_exists(const char *dir, bool bForce = false)
 {
-    unsigned cnt = 0;
-    pthread_mutex_lock(&pqu->headMut);
-    if(pqu->head != 0){
-        pthread_mutex_lock(&pqu->tailMut);
-        E_T *curNode = pqu->head;
-        while(curNode != pqu->tail){
-            cnt ++; 
-            curNode = curNode->next;
+	struct stat buf;
+	if(stat(dir, &buf)<0 || !S_ISDIR(buf.st_mode)){
+		//试着创建目录.
+		if(bForce && mkdir(dir, S_IRWXU | S_IRWXG | S_IRWXO)!= -1){
+			return true;
 		}
-		cnt ++;
-		pthread_mutex_unlock(&pqu->tailMut);
+		return false;
 	}
-    pthread_mutex_unlock(&pqu->headMut);
-    return cnt;
+	return true;
 }
 
-void mmq_put(MMQ_T *pqu, void *pdata)
+int save_binary_data(const char *filePath, const void* ptr, size_t num, ...)
 {
-    E_T *ele = (E_T*)malloc(sizeof(E_T));
-    ele->data = pdata;
-    ele->next = 0;
-    pthread_mutex_lock(&pqu->headMut);
-    pthread_mutex_lock(&pqu->tailMut);
-    if(pqu->head == 0){
-        pqu->head = pqu->tail = ele;
-        pthread_mutex_unlock(&pqu->headMut);
-        pthread_mutex_unlock(&pqu->tailMut);
-        pthread_cond_broadcast(&pqu->headCnd);
-        return;
+    FILE *fp = fopen(filePath, "wb");
+    if(fp == NULL){
+        LOG_WARN(g_logger, "fail to open file to write data, file: "<< filePath);
+        return -1;
     }
-		    
-    pthread_mutex_unlock(&pqu->headMut);
-    pqu->tail->next = ele;
-    pqu->tail = ele;
-    pthread_mutex_unlock(&pqu->tailMut);
+
+    int ret = 0;
+    va_list vl;
+    va_start(vl, num);
+    const void *curPtr = ptr;
+    size_t curNum = num;
+    while(true){
+        int retwr = fwrite(curPtr, 1, curNum, fp);
+        ret += retwr;
+        if(retwr != curNum){
+            LOG_WARN(g_logger, "fail to write data to file, file: " << filePath);
+            break;
+        }
+        curPtr = va_arg(vl, void*);
+        if(curPtr == NULL) break;
+        curNum = va_arg(vl, size_t);
+    }
+    
+    fclose(fp);
+    return ret;
 }
 
-static void mmq_take_unlocked(MMQ_T *pqu, void **ppdata)
+bool saveWave(char *pData, unsigned len, const char *saveFileName)
 {
-    E_T *ele = 0;
-    pthread_mutex_lock(&pqu->tailMut);
-    if(pqu->head == pqu->tail){
-        ele = pqu->head;
-        pqu->head = pqu->tail = 0;
+    FILE *fp = fopen(saveFileName, "ab");
+    if(fp == NULL){
+        LOG_WARN(g_logger, "fail to open file "<< saveFileName<< " error: "<< strerror(errno));
+        return false;
     }
-    pthread_mutex_unlock(&pqu->tailMut);
-    if(ele != 0){
-        *ppdata = ele->data;
-        free(ele);
-        return ;
+    bool ret = false;
+    PCM_HEADER pcmheader;
+    initialize_wave_header(&pcmheader, len);
+    int retw = fwrite(&pcmheader, sizeof(PCM_HEADER), 1, fp);
+    if(retw != 1){
+        LOG_WARN(g_logger, "fail to save data to file, filename: "<< saveFileName);
     }
-	    
-    ele = pqu->head;
-    pqu->head = ele->next;
-    *ppdata = ele->data;
-    free(ele);
-    return ;
+    else{
+        fwrite(pData, 1, len, fp);
+        ret = true;
+    }
+    fclose(fp);
+    return ret;
 }
 
 /**
- *  * instant version.
- *   */
-int mmq_take(MMQ_T *pqu, void **ppdata)
+ * one maintain operation for clearup routine.
+ * clear up records before <seconds> seconds go.
+ * this function  should be confined in lock of g_lockNewReported.
+ */
+void maintain_newreported(time_t curtime, unsigned seconds)
 {
-	 pthread_mutex_lock(&pqu->headMut);
-	 if(pqu->head == 0){
-	     pthread_mutex_unlock(&pqu->headMut);
-	     return 0;
-	 }
-	 mmq_take_unlocked(pqu, ppdata);
-	 pthread_mutex_unlock(&pqu->headMut);
-	 return 1;
-}
-
-static void unlock_mutex(void *plock){
-	    pthread_mutex_unlock((pthread_mutex_t *)plock);
-}
-/***
- *  * wait version 
- *   */
-int mmq_takew(MMQ_T *pqu, void **ppdata)
-{
-	pthread_mutex_lock(&pqu->headMut);
-	pthread_cleanup_push(unlock_mutex, &pqu->headMut);
-	while(pqu->head == 0){
-	   int retw = pthread_cond_wait(&pqu->headCnd, &pqu->headMut);
-	   if(retw != 0){
-	       fprintf(stderr, "error occurs in function pthread_cond_wait.\n");
-	       pthread_mutex_unlock(&pqu->headMut);
-	       pthread_exit((void*)1); 
-	   }
+	debugstring_newreported("before maintance");
+	vector<unsigned long> delID;
+	for(map<unsigned long,ProjRecord_t>::iterator IDs = NewReportedID.begin();IDs !=NewReportedID.end();++IDs)
+	{
+		if(curtime - (*IDs).second.timemark >= seconds)
+			delID.push_back((*IDs).first);
 	}
-    mmq_take_unlocked(pqu, ppdata);
-    pthread_cleanup_pop(1);
-    return 1;
+	for(unsigned int tt = 0;tt < delID.size();++tt)
+		NewReportedID.erase(delID[tt]);
+	debugstring_newreported("after maintance");
 }
 
