@@ -1,11 +1,16 @@
 
 export
-.PHONY: build buildall
+.PHONY: build09 buildall
 
-build:
+build09:
 	@echo ============================================
-	@echo ">>>>>>>>>>>>>>>>>>>start building libinterface.so<<<<<<<<<<<<<<<<<<<<<"
+	@echo ">>>>>>>>>>>>>>>>>>>start building 09<<<<<<<<<<<<<<<<<<<<<"
 	@echo ============================================
-	${MAKE} -f MakefileNew -f MakefileCpp
+	${MAKE} -f Makefile09 -f MakefileCpp
+buildZP:
+	@echo ============================================
+	@echo ">>>>>>>>>>>>>>>>>>>start building ZP<<<<<<<<<<<<<<<<<<<<<"
+	@echo ============================================
+	${MAKE} -f MakefileZP -f MakefileCpp
 
-buildall: build build242
+buildall: build09 buildZP build242

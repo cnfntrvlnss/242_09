@@ -4,8 +4,8 @@ CXX=g++
 
 CND_PLATFORM=Intel-Linux-x86
 CONF=Debug
-CND_DISTDIR=distNew
-CND_BUILDDIR=buildNew
+CND_DISTDIR=dist09
+CND_BUILDDIR=build09
 OBJDIR=${CND_BUILDDIR}/${CONF}/${CND_PLATFORM}/
 DISTDIR := ${CND_DISTDIR}/${CONF}/${CND_PLATFORM}/
 MODE=Test
@@ -13,8 +13,7 @@ TESTDIR=../test242/ioacas/
 
 VPATH=../src/
 
-
-CPPNAMES:=commonFunc.cpp dllVAD_dup.cpp hhj.cpp interface242.cpp log4z.cpp MusicDetect_dup.cpp ProjectBuffer.cpp spk_ex.cpp spkvad.cpp TLI_API_dup.cpp utilites.cpp waveinfo.cpp
+CPPNAMES:=interface242.cpp ioareg.cpp commonFunc.cpp dllVAD_dup.cpp hhj.cpp log4z.cpp MusicDetect_dup.cpp ProjectBuffer.cpp spk_ex.cpp spkvad.cpp TLI_API_dup.cpp utilites.cpp waveinfo.cpp
 CNAMES:=waveinfo.c
 PROGNAME=libIOACAS.so
 LDLIBS +=-L${TESTDIR} -lTLI_API -lSpeakerRecogAPI -ldllSRVADCluster -lNewVAD -lMusicDetect

@@ -414,9 +414,14 @@ void interhandler(int num)
     fprintf(stderr, "handling interruption envent.\n");
     exit(1);
 }
+#ifndef IOACAS
+#define IOACAS ioacas
+#endif
+#define LIBPATH(x) #x"/libIOACAS.so"
+#define LIBPATHM(x) LIBPATH(x)
 void initIoacas()
 {
-    const char *libPath = "ioacas/libIOACAS.so";
+    const char *libPath = LIBPATHM(IOACAS);
     void * hdl = dlopen(libPath, RTLD_NOW );
     if(hdl == NULL){
         fprintf(stderr, "ERROR fail to load library %s, error: %s.\n", libPath, dlerror());

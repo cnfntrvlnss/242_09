@@ -4,6 +4,8 @@
     > Mail: 
     > Created Time: Tue 03 Feb 2015 11:33:29 AM CST
  ************************************************************************/
+#ifndef UTILITES__H
+#define UTILITES__H
 
 #include <cassert>
 #include <cstring>
@@ -79,7 +81,7 @@ public:
     LockHelper mylock;
 
     bool loadFromFile(const char* filePath = NULL);
-    void checkAndLoad();
+    bool checkAndLoad();
     //not existing is equal to empty value.
     bool isUpdated(const char* group, const char* key);
     void accessValue(const char* group, const char* key, std::string& value);
@@ -156,3 +158,5 @@ bool make_directorys(const char *mypath);
 typedef bool (*FuncProcessFile)(const char*, const char*);
 unsigned procFilesInDir(const char* szDir, FuncProcessFile addr);
 
+
+#endif

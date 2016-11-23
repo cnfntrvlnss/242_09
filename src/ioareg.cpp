@@ -47,7 +47,6 @@ static char szMusicDetectCfg[] = "./ioacas/Music.cfg";
 static bool g_bUseLid=true;
 static char szLIDVADCfg[MAX_PATH] = "./ioacas/VAD_LID.cfg";
 static char szLIDCfgDir[MAX_PATH] = "./ioacas/sysdir";
-extern const unsigned short g_uLangServType; 
 void* IoaRegThread(void *param);
 //下面的两个变量是针对于语种的；第一个变量控制着写文件；第二个变量控制着上报。
 static std::vector<std::pair<unsigned char, unsigned char> > g_mLangReports;
@@ -95,15 +94,15 @@ class SpkInfoChd: public SpkInfo
 {
 public:
     SpkInfoChd(unsigned long param):
-        SpkInfo(param)
+        SpkInfo(param), servType(0x92), m_iHarmLevel(0)
     {}
     string toStr()const{
         ostringstream oss;
-        oss << "_"<< std::hex<< std::showbase<< g_uSpkServType<< std::noshowbase<< std::dec<< "_" << m_iHarmLevel;
+        oss << "_"<< std::hex<< std::showbase<< servType<< std::noshowbase<< std::dec<< "_" << m_iHarmLevel;
         return SpkInfo::toStr() + oss.str();
     }
     bool fromStr(const char* strSpk);
-
+    unsigned char servType;
     int m_iHarmLevel;
 };
 
@@ -117,7 +116,7 @@ bool SpkInfoChd::fromStr(const char* strSpk){
     if(!(iss >> pid)) return false;
     if(!(iss.get(chSep) || chSep != '_')) return false;
     if(!(iss >> std::hex>> servType>> std::dec)) return false;
-    if(servType != g_uSpkServType) return false;
+    if(servType != this->servType) return false;
     if(!(iss.get(chSep) || chSep != '_')) return false;
     if(!(iss >> harmLevel)) return false;
     this->spkId = pid;
@@ -201,7 +200,7 @@ void ioareg_updateConfig()
         pthread_mutex_unlock(&g_VADPrecentLock);
     }
 }
-bool ioareg_init(short threadNum)
+bool ioareg_init()
 {
 	spkScoreCfg.m_0Value = 0;
 	spkScoreCfg.m_100Value = 100;
@@ -212,6 +211,7 @@ bool ioareg_init(short threadNum)
     Config_getValue(&g_AutoCfg, "", "ifUseMusicDetect", g_bUseMusicDetect);
     Config_getValue(&g_AutoCfg, "", "savedMusicPrecent", g_iMusicPrecent);
     Config_getValue(&g_AutoCfg, "", "savedVadPrecent", g_iVADPrecent);
+    Config_getValue(&g_AutoCfg, "", "threadNumPerStream", g_ThreadNum);
     Config_getValue(&g_AutoCfg, "lid","ifUseLID", g_bUseLid);
     Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
     Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
@@ -232,6 +232,7 @@ bool ioareg_init(short threadNum)
 
 #define LOG4Z_VAR(x) << #x "=" << x << "\n"
     LOG_INFO(g_logger, "====================config====================\n" 
+            LOG4Z_VAR(g_ThreadNum)
             LOG4Z_VAR(g_bUseVAD)
             LOG4Z_VAR(g_bUseLid)
             LOG4Z_VAR(formLangReportsStr(g_mLangReports))
@@ -272,9 +273,8 @@ bool ioareg_init(short threadNum)
         LOG_INFO(g_logger, "finish initializing vad cluster engine.");
     }
 
-    g_ThreadNum = threadNum;
-	g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (threadNum));
-    for (int i = 0; i < threadNum; ++i)
+	g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (g_ThreadNum));
+    for (int i = 0; i < g_ThreadNum; ++i)
 	{
 		pthread_attr_t threadAttr;
 		pthread_attr_init(&threadAttr);
@@ -289,6 +289,7 @@ bool ioareg_init(short threadNum)
 		}
 		pthread_attr_destroy(&threadAttr);
 	}
+    return true;
 }
 
 bool ioareg_rlse()

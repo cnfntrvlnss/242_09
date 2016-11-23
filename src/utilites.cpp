@@ -389,8 +389,9 @@ bool ConfigRoom::loadFromFile(const char* filePath)
     return true;
 }
 
-void ConfigRoom::checkAndLoad()
+bool ConfigRoom::checkAndLoad()
 {
+    bool ret = false;
     mylock.lock();
     time_t lasttime = lastLoadFile;
     mylock.unLock();
@@ -399,11 +400,14 @@ void ConfigRoom::checkAndLoad()
         statbuf.st_mtime = 0;
         if(lasttime !=0){
             this->loadFromFile(configFile.c_str());
+            ret = true;
         }
     }
     if(lasttime < statbuf.st_mtime){
         this->loadFromFile(configFile.c_str());
+        ret = true;
     }
+    return ret;
 }
 bool ConfigRoom::isUpdated(const char* group, const char* key)
 {

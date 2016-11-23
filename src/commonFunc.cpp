@@ -75,7 +75,7 @@ char* GetLocalIP()
 	return retIP; 
 } 
 
-bool if_directory_exists(const char *dir, bool bForce = false)
+bool if_directory_exists(const char *dir, bool bForce)
 {
 	struct stat buf;
 	if(stat(dir, &buf)<0 || !S_ISDIR(buf.st_mode)){
@@ -137,24 +137,5 @@ bool saveWave(char *pData, unsigned len, const char *saveFileName)
     }
     fclose(fp);
     return ret;
-}
-
-/**
- * one maintain operation for clearup routine.
- * clear up records before <seconds> seconds go.
- * this function  should be confined in lock of g_lockNewReported.
- */
-void maintain_newreported(time_t curtime, unsigned seconds)
-{
-	debugstring_newreported("before maintance");
-	vector<unsigned long> delID;
-	for(map<unsigned long,ProjRecord_t>::iterator IDs = NewReportedID.begin();IDs !=NewReportedID.end();++IDs)
-	{
-		if(curtime - (*IDs).second.timemark >= seconds)
-			delID.push_back((*IDs).first);
-	}
-	for(unsigned int tt = 0;tt < delID.size();++tt)
-		NewReportedID.erase(delID[tt]);
-	debugstring_newreported("after maintance");
 }
 

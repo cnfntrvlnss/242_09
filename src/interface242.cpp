@@ -21,7 +21,7 @@ static bool g_bInitialized = false;
 static unsigned int g_iModuleID;
 
 static ReceiveResult g_ReportResultAddr;
-const unsigned short g_uLangServType = 0x97;
+unsigned short g_uLangServType = 0x97;
 const unsigned short g_uSpkServType = 0x92;
 
 const char szIoacasDir[]="./ioacas/";
@@ -30,10 +30,11 @@ ConfigRoom g_AutoCfg(((string)szIoacasDir + "SysFunc.cfg").c_str());
 static char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";// save hited project.
 static bool g_bDiscardable=true;// when feeding data.
 bool g_bSaveAfterRec=false; // when after processing, for project ID.
-static short g_ThreadNum = 1;
 
 LoggerId g_logger;
 
+std::map<unsigned long,ProjRecord_t> NewReportedID;
+pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
 /**
  * TODO 两个参数的含义还是不够明确，不知道怎么写这个函数.
  */
@@ -49,10 +50,8 @@ int GetDLLVersion(char *p, int &length)
 
 static void initGlobal(BufferConfig &myBufCfg)
 {
-
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
-    Config_getValue(&g_AutoCfg, "", "threadNumPerStream", g_ThreadNum);
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
@@ -62,7 +61,6 @@ static void initGlobal(BufferConfig &myBufCfg)
     Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMax", myBufCfg.m_uBlocksMax);
 
     myBufCfg.waitLength *= 16000;
-	if (g_ThreadNum <= 0)  g_ThreadNum = 1;
 	
 	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
 	if(m_TSI_SaveTopDir[tmpLen - 1] != '/'){
@@ -77,7 +75,6 @@ static void initGlobal(BufferConfig &myBufCfg)
 #define LOG4Z_VAR(x) << #x "=" << x << "\n"
     LOG_INFO(g_logger, "====================config====================\n" 
             LOG4Z_VAR(g_AutoCfg.configFile)
-            LOG4Z_VAR(g_ThreadNum)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bDiscardable)
             LOG4Z_VAR(g_bSaveAfterRec)
@@ -85,7 +82,6 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(myBufCfg.waitSecondsStep)
             LOG4Z_VAR(myBufCfg.waitSeconds)
             LOG4Z_VAR(myBufCfg.waitLength )
-            LOG4Z_VAR(g_ThreadNum)
             );
 
 }
@@ -111,7 +107,7 @@ int InitDLL(int iPriority,
 
     init_bufferglobal(buffconfig);
 
-    if(!ioareg_init(g_ThreadNum)){
+    if(!ioareg_init()){
         return 1;
     }
     {
@@ -361,6 +357,25 @@ bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned 
     return true;
 }
 
+/**
+ * one maintain operation for clearup routine.
+ * clear up records before <seconds> seconds go.
+ * this function  should be confined in lock of g_lockNewReported.
+ */
+void maintain_newreported(time_t curtime, unsigned seconds)
+{
+	debugstring_newreported("before maintance");
+	vector<unsigned long> delID;
+	for(map<unsigned long,ProjRecord_t>::iterator IDs = NewReportedID.begin();IDs !=NewReportedID.end();++IDs)
+	{
+		if(curtime - (*IDs).second.timemark >= seconds)
+			delID.push_back((*IDs).first);
+	}
+	for(unsigned int tt = 0;tt < delID.size();++tt)
+		NewReportedID.erase(delID[tt]);
+	debugstring_newreported("after maintance");
+}
+
 void *ioacas_maintain_procedure(void *)
 {
     time_t cur_time;
@@ -381,8 +396,9 @@ void *ioacas_maintain_procedure(void *)
         static time_t lasttime;
         if(cur_time > 3 + lasttime){
             lasttime = cur_time;
-            g_AutoCfg.checkAndLoad();
-            ioareg_updateConfig();
+            if(g_AutoCfg.checkAndLoad()){
+                ioareg_updateConfig();
+            }
         }
     }
     
