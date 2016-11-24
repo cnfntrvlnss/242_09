@@ -43,7 +43,7 @@
 #include <cerrno>
 #include <string>
 #include "../include/interface242.h"
-#include "waveinfo.h"
+#include "wav/waveinfo.h"
 #include "utilites.h"
 #include "log4z.h"
 extern zsummer::log4z::ILog4zManager *g_Log4zManager;
@@ -61,6 +61,7 @@ char* GetLocalIP();
 bool if_directory_exists(const char *dir, bool bForce = false);
 int save_binary_data(const char *filePath, const void* ptr, size_t num, ...);
 
+bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir, time_t curtime, unsigned long id, const unsigned short *typeId, const unsigned *userId, const int *confidence);
 bool saveWave(char *pData, unsigned len, const char *saveFileName);
 
 # endif  

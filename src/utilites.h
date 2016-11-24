@@ -130,6 +130,20 @@ inline std::string int2str(int i){
 std::vector<std::string> split(const std::string& s);
 std::vector<std::string> split(const std::string& s, const std::string& delim, const bool keep_empty = true);
 
+void insertStrAt0(char *src, char *tmpStr)
+{
+    int m = strlen(tmpStr);
+    int n = strlen(src);
+    char *curPtr = src + n + 1;
+    do{
+        curPtr --;
+        *(curPtr + m) = *curPtr;
+    }while(curPtr != src);
+    while(*tmpStr != '\0'){
+        *(curPtr++) = *(tmpStr++);
+    }
+}
+
 inline std::string concatePath(const char* path, const char* name)
 {
     char wpath[MAX_PATH];

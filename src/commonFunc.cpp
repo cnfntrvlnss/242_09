@@ -117,6 +117,53 @@ int save_binary_data(const char *filePath, const void* ptr, size_t num, ...)
     return ret;
 }
 
+/**
+ * 文件存储路径为：topdir/200109/01/increNum_ID_username_confidence.wav
+ * 文件存储路径写到savedname指向的内存中，作为结果返回。
+ */
+bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir, time_t curtime, unsigned long id, const unsigned short *typeId, const unsigned *userId, const int *confidence)
+{
+    if(curtime == 0){
+        time(&curtime);
+    }
+	struct tm *tmif;
+	tmif = localtime(&curtime);
+	char fipnt[10], sepnt[5];
+	snprintf(fipnt, 10, "%04d%02d%02d", tmif->tm_year+1900, tmif->tm_mon+1, tmif->tm_mday);
+	snprintf(sepnt, 5, "%02d", tmif->tm_hour);
+    savedname[0] = '\0';
+    int curCnt = 0;
+    if(topDir != NULL){
+        int topDirLen = strlen(topDir);
+        if(subDir == NULL){
+            if(topDir[topDirLen - 1] == '/') curCnt = sprintf(savedname, "%s%s", topDir, fipnt);
+            else curCnt = sprintf(savedname, "%s/%s", topDir, fipnt);
+            if_directory_exists(savedname, true);
+            curCnt += sprintf(savedname+ curCnt, "/%s/", sepnt);
+            if_directory_exists(savedname, true);
+        }
+        else{
+            if(topDir[topDirLen - 1] == '/')curCnt = sprintf(savedname, "%s%s/", topDir, subDir);
+            else curCnt = sprintf(savedname, "%s/%s/", topDir, subDir);
+            if_directory_exists(savedname, true); //create subdir if not exists.
+        }
+    }
+    curCnt += sprintf(savedname + curCnt, "%s%s%02d%02d_%lu", fipnt, sepnt, tmif->tm_min, tmif->tm_sec, id);
+    if(typeId != NULL){
+        curCnt += sprintf(savedname + curCnt, "_%lu", *typeId);
+    }
+    if(userId != NULL){
+        curCnt += sprintf(savedname + curCnt, "_%u", *userId);
+    }
+    if(confidence != NULL){
+        curCnt += sprintf(savedname + curCnt, "_%d", *confidence);
+    }
+
+    curCnt += sprintf(savedname + curCnt, ".wav");
+	return true;
+}
+
+
 bool saveWave(char *pData, unsigned len, const char *saveFileName)
 {
     FILE *fp = fopen(saveFileName, "ab");

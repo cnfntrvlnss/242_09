@@ -3,9 +3,8 @@
 /testunit/build/
 /testunit/bin/
 /testunit/lib/
-/test242/*
-!/test242/Makefile
-!/test242/src/
+/test09/
+/testzp/
 *.list
 *.tar.bz
 *.tar.gz

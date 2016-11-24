@@ -5,15 +5,11 @@
     > Created Time: Tue 06 Sep 2016 03:31:17 AM PDT
  ************************************************************************/
 
-#include "hhj.h"
-//#include "share/config.h"
+//#include "hhj.h"
 #include "commonFunc.h"
-#include "waveinfo.h"
-//#include "bufferglobalEx.h"
+#include "wav/waveinfo.h"
 #include "utilites.h"
 #include "ProjectBuffer.h"
-
-
 #include "ioareg.h"
 
 //TODO 这两个标记变量需要加锁.
@@ -161,6 +157,7 @@ int SendData2DLL(WavDataUnit *p)
 int CloseDLL()
 {
     rlse_bufferglobal();
+    ioareg_rlse();
     return 0;
 }
 
@@ -288,6 +285,7 @@ int GetDataNum4Process(int iType[], int num[])
  * 文件存储路径为：topdir/200109/01/increNum_ID_username_confidence.wav
  * 文件存储路径写到savedname指向的内存中，作为结果返回。
  */
+ #if 0
 bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir, unsigned long id, unsigned *type, unsigned *userId, int *confidence)
 {
 	time_t timer;
@@ -325,6 +323,7 @@ bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir,
     curCnt += sprintf(savedname + curCnt, ".wav");
 	return true;
 }
+ #endif
 
 bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned &len)
 {

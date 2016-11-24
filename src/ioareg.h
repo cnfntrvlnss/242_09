@@ -29,7 +29,6 @@ bool ioareg_init();
 void ioareg_updateConfig();
 bool ioareg_rlse();
 bool reportIoacasResult(CDLLResult &result, bool brep, char *writeLog, unsigned &len);
-bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir, unsigned long id, unsigned *type, unsigned *userId, int *confidence);
 
 //////////////////////////////////
 typedef struct ProjectRecord{
