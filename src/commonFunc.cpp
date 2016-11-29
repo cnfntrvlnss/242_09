@@ -34,6 +34,7 @@ zsummer::log4z::ILog4zManager* initLog4z()
 
 zsummer::log4z::ILog4zManager *g_Log4zManager = initLog4z();
 
+/*
 char* GetLocalIP()    
 {          
 	int MAXINTERFACES=16;    
@@ -74,6 +75,7 @@ char* GetLocalIP()
 	}  
 	return retIP; 
 } 
+*/
 
 bool if_directory_exists(const char *dir, bool bForce)
 {

@@ -130,7 +130,7 @@ inline std::string int2str(int i){
 std::vector<std::string> split(const std::string& s);
 std::vector<std::string> split(const std::string& s, const std::string& delim, const bool keep_empty = true);
 
-void insertStrAt0(char *src, char *tmpStr)
+inline void insertStrAt0(char *src, char *tmpStr)
 {
     int m = strlen(tmpStr);
     int n = strlen(src);
@@ -171,6 +171,7 @@ bool make_directorys(const char *mypath);
 
 typedef bool (*FuncProcessFile)(const char*, const char*);
 unsigned procFilesInDir(const char* szDir, FuncProcessFile addr);
+bool copyFile(const char* src, const char* des);
 
 
 #endif

@@ -16,6 +16,7 @@
 #include <string>
 #include <map>
 #include <sstream>
+#include <fstream>
 
 using namespace std;
 #define MAX_PATH 512
@@ -176,6 +177,16 @@ unsigned  procFilesInDir(const char* szDir, FuncProcessFile addr)
     return cnt;
 }
 
+bool copyFile(const char* src, const char* des)
+{
+    std::ifstream in(src, ios::binary);
+    std::ofstream out(des, ios::binary);
+    if(!in || !out){
+        return false;
+    }
+    out<< in.rdbuf();
+    return true;
+}
 
 union MyConfigItemValue{
 	bool *bvar;

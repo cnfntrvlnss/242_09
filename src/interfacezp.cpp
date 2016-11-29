@@ -29,6 +29,7 @@ static bool g_bDiscardable=true;// when feeding data.
 bool g_bSaveAfterRec=false; // when after processing, for project ID.
 
 LoggerId g_logger;
+string g_strIp;
 
 std::map<unsigned long,ProjRecord_t> NewReportedID;
 pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
@@ -50,8 +51,6 @@ int GetDLLVersion(char *p, int &length)
 }
 
 void* IoaRegThread(void *pvParam);
-void *netLogThread(void *param);
-void *offLIDRegThread(void *);
 
 
 /*****************
@@ -116,6 +115,45 @@ static std::string formReportFilterStr(const std::map<int, int> &filter)
     return oss.str();
 }
 
+static void initGlobal(BufferConfig &myBufCfg)
+{
+    Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
+    Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
+    Config_getValue(&g_AutoCfg, "", "ifUseBAMP", g_bUseBamp);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "waitLength", myBufCfg.waitLength);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlockSize", myBufCfg.m_uBlockSize);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMin", myBufCfg.m_uBlocksMin);
+    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMax", myBufCfg.m_uBlocksMax);
+
+    myBufCfg.waitLength *= 16000;
+	
+	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
+	if(m_TSI_SaveTopDir[tmpLen - 1] != '/'){
+		m_TSI_SaveTopDir[tmpLen] = '/';
+		m_TSI_SaveTopDir[tmpLen + 1] = '\0';
+	}
+	g_logger = g_Log4zManager->createLogger("ioacas");
+    char strVer[50];
+    int verLen = 50;
+    GetDLLVersion(strVer, verLen);
+    LOG_INFO(g_logger, "version --- "<< strVer);
+#define LOG4Z_VAR(x) << #x "=" << x << "\n"
+    LOG_INFO(g_logger, "====================config====================\n" 
+            LOG4Z_VAR(g_AutoCfg.configFile)
+            LOG4Z_VAR(m_TSI_SaveTopDir)
+            LOG4Z_VAR(g_bUseBamp)
+            LOG4Z_VAR(g_bDiscardable)
+            LOG4Z_VAR(g_bSaveAfterRec)
+            LOG4Z_VAR(g_AutoCfg.configFile)
+            LOG4Z_VAR(myBufCfg.waitSecondsStep)
+            LOG4Z_VAR(myBufCfg.waitSeconds)
+            LOG4Z_VAR(myBufCfg.waitLength )
+            );
+}
+/*
 static void initGlobal(BufferConfig &myBufCfg)
 {
     g_strIp = GetLocalIP();
@@ -203,7 +241,9 @@ static void initGlobal(BufferConfig &myBufCfg)
 			<<"use "<< g_ThreadNum<<" threads for Recognizition " <<"\n"
 			);
 }
+*/
 
+static void *ioacas_maintain_procedure(void *);
 static void reportBampResultSeg(struct timeval curtime, CDLLResult *pResult, ostream& oss);
 
 int InitDLL(int iPriority,
@@ -218,17 +258,12 @@ int InitDLL(int iPriority,
         LOGE("ioacas module is already initialized.");
         return 0;
     }
+    g_strIp = GetLocalIP();
     g_iModuleID = iModuleID;
     g_ReportResultAddr = func;
     
     BufferConfig buffconfig;
     initGlobal(buffconfig);
-
-    int err = pthread_key_create(&g_RecWavBufsKey, free);
-    if(err != 0){
-        LOG_ERROR(g_logger, "fail to create pthread key, error: "<< err);
-        exit(1);
-    }
 
     if(g_bUseBamp){
         if(!bamp_init(reportBampResultSeg)){
@@ -238,23 +273,21 @@ int InitDLL(int iPriority,
     }
 
     init_bufferglobal(buffconfig);
-
-	g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (g_ThreadNum));
-	for (int i = 0; i < g_ThreadNum; ++i)
-	{
+    if(!ioareg_init()){
+        return 1;
+    }
+    {
 		pthread_attr_t threadAttr;
 		pthread_attr_init(&threadAttr);
-		pthread_attr_setstacksize(&threadAttr, 2080 * 1024); // 120*1024
-		//pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-        RecogThreadSpace *tmpStr = new RecogThreadSpace;
-        tmpStr->threadIdx = i;
-		int retc = pthread_create(&g_pthread_id[i], &threadAttr, IoaRegThread, tmpStr);
-		if(retc != 0){
-			LOG_ERROR(g_logger, "fail to create recognition thread, index "<< tmpStr->threadIdx);
+        pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
+        pthread_t mthrdId;
+        int retc = pthread_create(&mthrdId, &threadAttr, ioacas_maintain_procedure, NULL);
+        if(retc != 0){
+            LOG_ERROR(g_logger, "fail to create maintain thread!");
             exit(1);
-		}
+        }
 		pthread_attr_destroy(&threadAttr);
-	}
+    }
 
     g_bInitialized = true;
     return 0;
@@ -355,29 +388,8 @@ int SendData2DLL(WavDataUnit *p)
         struct timeval tmval0 = tmval;
         gettimeofday(&tmval, NULL);
         if(ptrBuf != NULL) returnBuffer(ptrBuf);
-        LOGFMTT("%s ElapseInBamp %ld %ld    %ld %ld", szHead, tmval0.tv_sec, tmval0.tv_usec, tmval.tv_sec, tmval.tv_usec);
+        LOGFMT_TRACE(g_logger, "%s ElapseInBamp %ld %ld    %ld %ld", szHead, tmval0.tv_sec, tmval0.tv_usec, tmval.tv_sec, tmval.tv_usec);
     }
-    {
-        time_t cur_time = tmval.tv_sec;
-        //维护最近的节目列表, 并过滤节目。.
-        pthread_mutex_lock(&g_lockNewReported);
-        static time_t maintainprojectfilterlasttime = 0;
-        if(maintainprojectfilterlasttime == 0){
-            maintainprojectfilterlasttime = cur_time;
-        }
-        if(cur_time - maintainprojectfilterlasttime > 3600){
-            maintainprojectfilterlasttime = cur_time;
-            maintain_newreported(cur_time, 3600 * 5);
-        }
-        if(NewReportedID.find(p->m_iPCBID) != NewReportedID.end())
-        {
-            pthread_mutex_unlock(&g_lockNewReported);
-            LOG_INFO(g_logger, szHead<< "abandoned for being processed recently.");
-            return 0;
-        }
-        pthread_mutex_unlock(&g_lockNewReported);
-    }
-
     return 0;
 }
 
@@ -430,10 +442,7 @@ int GetDataNum4Process(int iType[], int num[])
     return 0;
 }
 
-/////////////////////recog process///////////////////
-//
-
-void reportBampResultSeg(struct timeval curtime, CDLLResult *pResult, ostream &oss)
+void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, ostream &oss)
 {
     oss<< " InProjectStart="<< pResult->m_fSegPosInPCB[0]<< " MatchedDuration="<< pResult->m_fTargetMatchLen<< " CfgID="<< pResult->m_iTargetID <<" InCfgStart="<< pResult->m_fSegPosInTarget[0]<< " MatchRate="<< pResult->m_fSegLikely[0];
     char savedfile[MAX_PATH];
@@ -462,6 +471,67 @@ void reportBampResultSeg(struct timeval curtime, CDLLResult *pResult, ostream &o
     g_ReportResultAddr(g_iModuleID, pResult);
 }
 
+//void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, ostream &oss)
+bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned &len)
+{
+    unsigned long &pid = result.m_pDataUnit[0]->m_iPCBID;
+    int confidence = (int)result.m_fLikely;
+    unsigned configID = result.m_iTargetID;
+    unsigned short alarmType = result.m_iAlarmType;
+    len += sprintf(writeLog + len, "ALARMTYPE=%u TARGETID=%u CONFIDENCE=%d ", alarmType, configID, confidence);
+    char savedfile[MAX_PATH];
+    time_t cur_time;
+    time(&cur_time);
+    gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, cur_time, pid, &alarmType, &configID, &confidence);
+    snprintf(result.m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);
+    bool retSave = saveWave((char*)result.m_pDataUnit[0]->m_pData, result.m_pDataUnit[0]->m_iDataLen, savedfile);
+    if(retSave){
+        if(writeLog!=NULL){
+            len += sprintf(writeLog + len, "DATASAVEPATH=%s ", result.m_strInfo);
+        }
+    }
+    
+    if(bRep){
+        if(alarmType == g_uLangServType) result.m_iTargetID |= 0x200;
+        g_ReportResultAddr(g_iModuleID, &result);
+        if(alarmType == g_uLangServType) result.m_iTargetID &= ~0x200;
+        const char* debugDir = "ioacas/debug/";
+        if(if_directory_exists(debugDir)){
+            char wholePath[MAX_PATH];
+            sprintf(wholePath, "%sMessage_%lu", debugDir, pid);
+            save_binary_data(wholePath, &result, sizeof(CDLLResult), result.m_pDataUnit[0], sizeof(WavDataUnit), NULL);
+        }
+    }
+    return true;
+}
+
+void *ioacas_maintain_procedure(void *)
+{
+    time_t cur_time;
+    time(&cur_time);
+
+    if(true){
+        //maitain project filter.
+        pthread_mutex_lock(&g_lockNewReported);
+        static time_t projectfilterlasttime = 0;
+        if(cur_time   > 3600 + projectfilterlasttime){
+            projectfilterlasttime = cur_time;
+        }
+        pthread_mutex_unlock(&g_lockNewReported);
+    }
+    if(true){
+        //update some configurations.
+        static time_t lasttime;
+        if(cur_time > 3 + lasttime){
+            lasttime = cur_time;
+            if(g_AutoCfg.checkAndLoad()){
+                ioareg_updateConfig();
+            }
+        }
+    }
+    
+    return NULL;
+}
 #if 0
 void reportBampResult(time_t curtime, CDLLResult *pResult, ostream& oss)
 {

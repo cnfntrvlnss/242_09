@@ -1,6 +1,6 @@
 
 export
-.PHONY: build09 buildall
+.PHONY: build09 buildZP buildall
 
 build09:
 	@echo ============================================

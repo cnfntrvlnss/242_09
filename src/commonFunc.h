@@ -45,6 +45,7 @@
 #include "../include/interface242.h"
 #include "wav/waveinfo.h"
 #include "utilites.h"
+#include "socket_ex.h"
 #include "log4z.h"
 extern zsummer::log4z::ILog4zManager *g_Log4zManager;
 extern LoggerId g_logger;
@@ -56,8 +57,6 @@ extern ConfigRoom g_AutoCfg;
 #define PCM_ONESEC_SMPS 8000
 #define POSITIVE_PCM_LEN (PCM_ONESEC_LEN * 10)
 
-
-char* GetLocalIP();
 bool if_directory_exists(const char *dir, bool bForce = false);
 int save_binary_data(const char *filePath, const void* ptr, size_t num, ...);
 

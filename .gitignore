@@ -1,10 +1,13 @@
 /make/build*
 /make/dist*
+/test/*
+!/test/src/
+!/test/Makefile
 /testunit/build/
 /testunit/bin/
 /testunit/lib/
 /test09/
-/testzp/
+/testZP/
 *.list
 *.tar.bz
 *.tar.gz

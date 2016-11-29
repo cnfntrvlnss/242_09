@@ -27,6 +27,7 @@ static char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";// save hited 
 static bool g_bDiscardable=true;// when feeding data.
 bool g_bSaveAfterRec=false; // when after processing, for project ID.
 
+string m_strIp;
 LoggerId g_logger;
 
 std::map<unsigned long,ProjRecord_t> NewReportedID;
@@ -79,7 +80,6 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(myBufCfg.waitSeconds)
             LOG4Z_VAR(myBufCfg.waitLength )
             );
-
 }
 
 static void *ioacas_maintain_procedure(void *);
@@ -98,6 +98,7 @@ int InitDLL(int iPriority,
     g_iModuleID = iModuleID;
     g_ReportResultAddr = func;
     
+    m_strIp = GetLocalIP();
     BufferConfig buffconfig;
     initGlobal(buffconfig);
 
@@ -330,11 +331,13 @@ bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned 
     unsigned long &pid = result.m_pDataUnit[0]->m_iPCBID;
     int confidence = (int)result.m_fLikely;
     unsigned configID = result.m_iTargetID;
-    unsigned alarmType = result.m_iAlarmType;
+    unsigned short alarmType = result.m_iAlarmType;
     len += sprintf(writeLog + len, "ALARMTYPE=%u TARGETID=%u CONFIDENCE=%d ", alarmType, configID, confidence);
     char savedfile[MAX_PATH];
-    gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, pid, &alarmType, &configID, &confidence);
-    snprintf(result.m_strInfo, 1024, "%s:%s", GetLocalIP(), savedfile);
+    time_t cur_time;
+    time(&cur_time);
+    gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, cur_time, pid, &alarmType, &configID, &confidence);
+    snprintf(result.m_strInfo, 1024, "%s:%s", m_strIp.c_str(), savedfile);
     bool retSave = saveWave((char*)result.m_pDataUnit[0]->m_pData, result.m_pDataUnit[0]->m_iDataLen, savedfile);
     if(retSave){
         if(writeLog!=NULL){

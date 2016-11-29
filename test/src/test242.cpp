@@ -55,7 +55,9 @@ FuncCloseDll funcCloseDll;
 FuncNotifyProjFinish funcNotifyProjFinish;
 FuncIsAllFinished funcIsAllFinished;
 #define MAX_PATH 512
-unsigned g_packetBytes = 320000;
+#ifndef PACKETBYTES 
+#define PACKETBYTES 320000
+#endif
 bool g_bSingleProjectMode = false;
 //namespace zen4audio{
 //    void notifyProjFinish(unsigned long);
@@ -233,7 +235,7 @@ void *sendProjectProcess(void *param)
 {
 	pthread_t curpid = pthread_self();
     unsigned count = 0;
-	char *databuf = (char*)malloc(g_packetBytes);
+	char *databuf = (char*)malloc(PACKETBYTES);
     while(true){
         pthread_mutex_lock(&sendCSLocker);
         ProjInfo *ptask = g_iterProjInfo.next();
@@ -277,7 +279,7 @@ void *sendProjectProcess(void *param)
 
 		while(true)
 		{
-            ifs.read(databuf, g_packetBytes);
+            ifs.read(databuf, PACKETBYTES);
 			int bulksize = ifs.gcount();
             if(bulksize % 2 != 0){
                 fprintf(stderr, "the length of data is odd, skiplen: %d, headlen: %ld, datalen: %ld, file %s.\n", skipLen, headlen, ptask->dataLen, ptask->filePath);

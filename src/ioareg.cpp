@@ -30,17 +30,18 @@ struct RecogThreadSpace{
 };
 
 char g_szAllPrjsDir[MAX_PATH]; //save all projects, when after processing.
+pthread_mutex_t g_AllProjsDirLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_key_t g_RecWavBufsKey;
 static pthread_t *g_pthread_id = NULL;
 static short g_ThreadNum = 1;
 
 //////////////////-----vad-----
 static bool g_bUseVAD=false;
-static int g_iVADPrecent = 50;
+static int g_iVADPrecent = 101;
 static pthread_mutex_t g_VADPrecentLock = PTHREAD_MUTEX_INITIALIZER;
 //////////////////----music----
 static bool g_bUseMusicDetect=false;
-static int g_iMusicPrecent = 50;
+static int g_iMusicPrecent = 101;
 static pthread_mutex_t g_MusicPrecentLock = PTHREAD_MUTEX_INITIALIZER;
 static char szMusicDetectCfg[] = "./ioacas/Music.cfg";
 ///////////////////---lid---
@@ -198,6 +199,16 @@ void ioareg_updateConfig()
         pthread_mutex_lock(&g_VADPrecentLock);
         Config_getValue(&g_AutoCfg, "lid", "savedVadPrecent", g_iVADPrecent);
         pthread_mutex_unlock(&g_VADPrecentLock);
+    }
+    if(g_AutoCfg.isUpdated("", "saveAllTopDir")){
+        pthread_mutex_lock(&g_AllProjsDirLock);
+        Config_getValue(&g_AutoCfg, "", "saveAllTopDir", g_szAllPrjsDir);
+        unsigned tmpLen = strlen(g_szAllPrjsDir);
+        if(tmpLen > 0 && g_szAllPrjsDir[tmpLen - 1] != '/'){
+            g_szAllPrjsDir[tmpLen] = '/';
+            g_szAllPrjsDir[tmpLen + 1] = '\0';
+        }
+        pthread_mutex_lock(&g_AllProjsDirLock);
     }
 }
 bool ioareg_init()
@@ -718,21 +729,17 @@ void* IoaRegThread(void *param)
 				pthread_mutex_unlock(&g_lockNewReported);
 			}
             //保存节目数据. --- for debug.
+            pthread_mutex_lock(&g_AllProjsDirLock);
             size_t tmpLen = strlen(g_szAllPrjsDir);
-            if(tmpLen > 0 && g_szAllPrjsDir[tmpLen - 1] == '/' && if_directory_exists(g_szAllPrjsDir)){
+            if(tmpLen > 0 && if_directory_exists(g_szAllPrjsDir)){
                 char savedfile[MAX_PATH];
-                gen_spk_save_file(savedfile, g_szAllPrjsDir, NULL, curPid, NULL, NULL, NULL);
+                gen_spk_save_file(savedfile, g_szAllPrjsDir, NULL, cur_time.tv_sec, curPid, NULL, NULL, NULL);
+                pthread_mutex_unlock(&g_AllProjsDirLock);
                 if(!saveWave(projData, projLen, savedfile)){
                 }
-                //若子目录存在，才写相应的中间处理语音数据.
-                if(hVAD != -1){
-                    gen_spk_save_file(savedfile, g_szAllPrjsDir, "vadcutdir", curPid, NULL, NULL, NULL);
-                    saveWave((char*)This_Buf.vadBuf, This_Buf.vadBufLen * sizeof(short), savedfile);
-                }
-                if(hMCut != NULL){
-                    gen_spk_save_file(savedfile, g_szAllPrjsDir, "musiccutdir", curPid, NULL, NULL, NULL);
-                    saveWave((char*)This_Buf.mcutBuf, This_Buf.mcutBufLen * sizeof(short), savedfile);
-                }
+            }
+            else{
+                pthread_mutex_unlock(&g_AllProjsDirLock);
             }
 
             release_rec_bufs();
