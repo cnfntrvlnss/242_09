@@ -17,7 +17,12 @@ static bool g_bInitialized = false;
 static unsigned int g_iModuleID;
 
 static ReceiveResult g_ReportResultAddr;
-unsigned short g_uLangServType = 0x97;
+const unsigned int g_uLangWeirType = 0x97;
+const unsigned int g_uLangWeirID = 0x20; 
+const unsigned int g_uLangTurkType = 0x9a;
+const unsigned int g_uLangTurkID = 0x30;
+const unsigned int g_uLangAlabType = 0x9b;
+const unsigned int g_uLangAlabID = 0x40;
 const unsigned short g_uSpkServType = 0x92;
 
 const char szIoacasDir[]="./ioacas/";
@@ -346,9 +351,10 @@ bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned 
     }
     
     if(bRep){
-        if(alarmType == g_uLangServType) result.m_iTargetID |= 0x200;
+        // only support lang report.
+        result.m_iTargetID |= 0x200;
         g_ReportResultAddr(g_iModuleID, &result);
-        if(alarmType == g_uLangServType) result.m_iTargetID &= ~0x200;
+        result.m_iTargetID &= ~0x200;
         const char* debugDir = "ioacas/debug/";
         if(if_directory_exists(debugDir)){
             char wholePath[MAX_PATH];

@@ -23,7 +23,13 @@ using namespace std;
 //using namespace BufferGlobal;
 using namespace zen4audio;
 
-extern unsigned short g_uLangServType; 
+extern const unsigned int g_uLangWeirType;
+extern const unsigned int g_uLangWeirID;
+extern const unsigned int g_uLangTurkType;
+extern const unsigned int g_uLangTurkID;
+extern const unsigned int g_uLangAlabType;
+extern const unsigned int g_uLangAlabID;
+
 extern bool g_bSaveAfterRec;
 bool ioareg_init();
 void ioareg_updateConfig();
