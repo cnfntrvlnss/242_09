@@ -23,18 +23,18 @@ using namespace std;
 //using namespace BufferGlobal;
 using namespace zen4audio;
 
-extern const unsigned int g_uLangWeirType;
-extern const unsigned int g_uLangWeirID;
-extern const unsigned int g_uLangTurkType;
-extern const unsigned int g_uLangTurkID;
-extern const unsigned int g_uLangAlabType;
-extern const unsigned int g_uLangAlabID;
+extern const unsigned int g_uVADType;
+extern const unsigned int g_uVADID;
+extern const unsigned int g_uMusicType;
+extern const unsigned int g_uMusicID;
+
+extern std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
 
 extern bool g_bSaveAfterRec;
 bool ioareg_init();
 void ioareg_updateConfig();
 bool ioareg_rlse();
-bool reportIoacasResult(CDLLResult &result, bool brep, char *writeLog, unsigned &len);
+bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len);
 
 //////////////////////////////////
 typedef struct ProjectRecord{

@@ -49,9 +49,6 @@ static bool g_bUseLid=true;
 static char szLIDVADCfg[MAX_PATH] = "./ioacas/VAD_LID.cfg";
 static char szLIDCfgDir[MAX_PATH] = "./ioacas/sysdir";
 void* IoaRegThread(void *param);
-//下面的两个变量是针对于语种的；第一个变量控制着写文件；第二个变量控制着上报。
-static std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
-static std::map<std::pair<unsigned int, unsigned int>, int> g_mLangReportFilter;
 
 ///////////////////---spk---
 static char szSpkVADCfg[MAX_PATH] = "./ioacas/VAD_SID.cfg";
@@ -125,98 +122,6 @@ bool SpkInfoChd::fromStr(const char* strSpk){
     return true;
 }
 
-static inline unsigned dft_getTypeFromId(unsigned int id)
-{
-    if(id == g_uLangWeirID) return g_uLangWeirType;
-    else if(id == g_uLangTurkID) return g_uLangTurkType;
-    else if(id == g_uLangAlabID) return g_uLangAlabType;
-    else return g_uLangWeirType;
-}
-/*****************
- * param str eg: 11->1;10->2;
- * return list eg:[(11,1), (10,2)]
- */
-static std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > parseLangReportsFromStr(const char*strLine)
-{
-	char tmpLine[256];
-    std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > retm;
-	strncpy(tmpLine, strLine, 256);
-	char *st = tmpLine;
-	while(true){
-		char *tkEnd = strchr(st, ',');
-		if(tkEnd != NULL) {
-			*tkEnd = '\0';
-		}
-		unsigned int t, f, s;
-        bool bparsed = false;
-        if(strchr(st, ':') == NULL){
-            if(sscanf(st, "%u %x", &f, &s) == 2){
-                t = dft_getTypeFromId(s);
-                bparsed = true;
-            }
-        }
-        else{
-            if(sscanf(st, "%u %x:%x", &f, &t, &s) == 3){
-                bparsed = true;
-            }
-        }
-        if(bparsed) retm.push_back(make_pair(f, std::make_pair(t, s)));
-		if(tkEnd == NULL) break;
-		st = tkEnd + 1;
-	}
-	return retm;
-}
-
-/**
- * reverse process of the func above.
- */
-static std::string formLangReportsStr(std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > >& langReports)
-{
-	ostringstream oss;
-	for(unsigned i=0; i< langReports.size(); i++){
-		oss<< (int)langReports[i].first<< " " << std::hex<< std::showbase<< (int)langReports[i].second.first<< ":" << (int)langReports[i].second.second << std::dec<< std::noshowbase << ",";
-	}
-	return oss.str();
-}
-
-static bool parseReportFilter(const char *strLine, std::map<std::pair<unsigned int, unsigned int>, int> &filter)
-{
-    char tmpLine[MAX_PATH];
-    strncpy(tmpLine, strLine, MAX_PATH);
-    char *st = tmpLine;
-    unsigned char tmpCh;
-    while(true){
-        char *ed = strchr(st, ',');
-        if(ed != NULL) *ed = '\0';
-        unsigned int t, f;
-        int s;
-        bool bparsed = false;
-        if(strchr(st, ':') == NULL){
-            if(sscanf(st, "%x %d", &f, &s) == 2){
-                t = dft_getTypeFromId(f);
-                bparsed = true;
-            }
-        }
-        else{
-            if(sscanf(st, "%x:%x %d", &t, &f, &s) == 3){
-                bparsed = true;
-            }
-        }
-        if(bparsed) filter[make_pair(t, f)] = s;
-        if(ed == NULL) break;
-        st = ed + 1;
-    }
-    return true;
-}
-static std::string formReportFilterStr(std::map<std::pair<unsigned int, unsigned int>, int> &filter)
-{
-    std::ostringstream oss;
-    for(std::map<std::pair<unsigned int, unsigned int>, int>::const_iterator it=filter.begin(); it != filter.end(); it++){
-        oss<< std::hex<< std::showbase<< it->first.first<< ":"<< it->first.second << " "<< std::dec<< std::noshowbase<< it->second <<",";
-    }
-    return oss.str();
-}
-
 void ioareg_updateConfig()
 {
 
@@ -245,8 +150,6 @@ bool ioareg_init()
 {
 	spkScoreCfg.m_0Value = 0;
 	spkScoreCfg.m_100Value = 100;
-	char szLangReports[256] = "14 0x20,";
-    char szLangReportFilter[256] = "0x20 99,";
     Config_getValue(&g_AutoCfg, "", "saveAllTopDir", g_szAllPrjsDir);
     Config_getValue(&g_AutoCfg, "", "ifUseVAD", g_bUseVAD);
     Config_getValue(&g_AutoCfg, "", "ifUseMusicDetect", g_bUseMusicDetect);
@@ -254,8 +157,6 @@ bool ioareg_init()
     Config_getValue(&g_AutoCfg, "", "savedVadPrecent", g_iVADPrecent);
     Config_getValue(&g_AutoCfg, "", "threadNumPerStream", g_ThreadNum);
     Config_getValue(&g_AutoCfg, "lid","ifUseLID", g_bUseLid);
-    Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
-    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
     Config_getValue(&g_AutoCfg, "spk", "ifUseSPK", g_bUseSpk);
     Config_getValue(&g_AutoCfg, "spk", "ifUseVAD", g_bSpkUseVad);
     Config_getValue(&g_AutoCfg, "spk", "ifUseMusicDetect", g_bSpkUseMCut);
@@ -268,18 +169,14 @@ bool ioareg_init()
 		g_szAllPrjsDir[tmpLen + 1] = '\0';
 	}
 
-	g_mLangReports = parseLangReportsFromStr(szLangReports);
-    parseReportFilter(szLangReportFilter, g_mLangReportFilter);
 
 #define LOG4Z_VAR(x) << #x "=" << x << "\n"
     LOG_INFO(g_logger, "====================config====================\n" 
             LOG4Z_VAR(g_ThreadNum)
             LOG4Z_VAR(g_bUseVAD)
             LOG4Z_VAR(g_bUseLid)
-            LOG4Z_VAR(formLangReportsStr(g_mLangReports))
             LOG4Z_VAR(g_bUseMusicDetect)
             LOG4Z_VAR(g_iVADPrecent)
-            LOG4Z_VAR(formReportFilterStr(g_mLangReportFilter).c_str())
             LOG4Z_VAR(szMusicDetectCfg)
             LOG4Z_VAR(szLIDCfgDir)
             LOG4Z_VAR(g_bUseSpk)
@@ -428,12 +325,12 @@ static void vadProcess(RecogThreadSpace &rec, int hVad)
         int ivprecent = g_iVADPrecent;
         pthread_mutex_unlock(&g_VADPrecentLock);
         if(vadRatio > ivprecent){
-            rec.result.m_iTargetID = 0x01;
-            rec.result.m_iAlarmType = g_uLangWeirType;
+            rec.result.m_iTargetID = g_uVADID;
+            rec.result.m_iAlarmType = g_uVADType;
             rec.result.m_iHarmLevel = 0;
             rec.result.m_fLikely = vadRatio;
             rec.result.m_fSegLikely[0] = vadRatio;
-            reportIoacasResult(rec.result, false, WriteLog, logLen);
+            reportIoacasResult(rec.result, WriteLog, logLen);
         }
         recBuf = rec.vadBuf;
         recBufLen = rec.vadBufLen;
@@ -484,12 +381,12 @@ static void musicProcess(RecogThreadSpace &rec, MscCutHandle hMCut)
         int imprecent = g_iMusicPrecent;
         pthread_mutex_unlock(&g_MusicPrecentLock);
         if(imprecent < mscRatio){
-            rec.result.m_iTargetID = 0x02;
-            rec.result.m_iAlarmType = g_uLangWeirType;
+            rec.result.m_iTargetID = g_uMusicID;
+            rec.result.m_iAlarmType = g_uMusicType;
             rec.result.m_iHarmLevel = 0;
             rec.result.m_fLikely = mscRatio;
             rec.result.m_fSegLikely[0] = mscRatio;
-            reportIoacasResult(rec.result, false, WriteLog, logLen);
+            reportIoacasResult(rec.result, WriteLog, logLen);
         }
         break;
     }
@@ -540,12 +437,12 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             int imprecent = g_iMusicPrecent;
             pthread_mutex_unlock(&g_MusicPrecentLock);
             if(imprecent < mscRatio){
-                rec.result.m_iTargetID = 0x02;
-                rec.result.m_iAlarmType = g_uLangWeirType;
+                rec.result.m_iTargetID = g_uMusicID;
+                rec.result.m_iAlarmType = g_uMusicType;
                 rec.result.m_iHarmLevel = 0;
                 rec.result.m_fLikely = mscRatio;
                 rec.result.m_fSegLikely[0] = mscRatio;
-                reportIoacasResult(rec.result, false, WriteLog, logLen);
+                reportIoacasResult(rec.result, WriteLog, logLen);
             }
             recBuf = rec.mcutBuf;
             recBufLen = rec.mcutBufLen;
@@ -575,12 +472,12 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             int ivprecent = g_iVADPrecent;
             pthread_mutex_unlock(&g_VADPrecentLock);
             if(vadRatio > ivprecent){
-                rec.result.m_iTargetID = 0x01;
-                rec.result.m_iAlarmType = g_uLangWeirType;
+                rec.result.m_iTargetID = g_uVADID;
+                rec.result.m_iAlarmType = g_uVADType;
                 rec.result.m_iHarmLevel = 0;
                 rec.result.m_fLikely = vadRatio;
                 rec.result.m_fSegLikely[0] = vadRatio;
-                reportIoacasResult(rec.result, false, WriteLog, logLen);
+                reportIoacasResult(rec.result, WriteLog, logLen);
             }
             recBuf = rec.vadBuf;
             recBufLen = rec.vadBufLen;
@@ -606,11 +503,7 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
             #endif
             if(checkAndSetLidResSt(rec.result, nMax, score)){
-                bool brep = false;
-                if(g_mLangReportFilter.find(make_pair(rec.result.m_iAlarmType, rec.result.m_iTargetID)) != g_mLangReportFilter.end() && g_mLangReportFilter[make_pair(rec.result.m_iAlarmType, rec.result.m_iTargetID)] <= rec.result.m_fLikely){
-                    brep = true;
-                }
-                reportIoacasResult(rec.result, brep, WriteLog, logLen);
+                reportIoacasResult(rec.result, WriteLog, logLen);
             }
         }
         break;

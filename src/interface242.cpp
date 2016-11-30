@@ -17,6 +17,10 @@ static bool g_bInitialized = false;
 static unsigned int g_iModuleID;
 
 static ReceiveResult g_ReportResultAddr;
+const unsigned int g_uVADType = 0x97;
+const unsigned int g_uVADID = 0x01;
+const unsigned int g_uMusicType = 0x97;
+const unsigned int g_uMusicID = 0x02;
 const unsigned int g_uLangWeirType = 0x97;
 const unsigned int g_uLangWeirID = 0x20; 
 const unsigned int g_uLangTurkType = 0x9a;
@@ -24,6 +28,103 @@ const unsigned int g_uLangTurkID = 0x30;
 const unsigned int g_uLangAlabType = 0x9b;
 const unsigned int g_uLangAlabID = 0x40;
 const unsigned short g_uSpkServType = 0x92;
+unsigned dft_getTypeFromId(unsigned int id)
+{
+    if(id == g_uLangWeirID) return g_uLangWeirType;
+    else if(id == g_uLangTurkID) return g_uLangTurkType;
+    else if(id == g_uLangAlabID) return g_uLangAlabType;
+    else if(id == g_uVADID) return g_uVADType;
+    else if(id == g_uMusicID) return g_uMusicType;
+    else return g_uLangWeirType;
+}
+
+//下面的两个变量是针对于语种的；第一个变量控制着写文件；第二个变量控制着上报。
+std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
+static std::map<std::pair<unsigned int, unsigned int>, int> g_mLangReportFilter;
+/*****************
+ * param str eg: 11->1;10->2;
+ * return list eg:[(11,1), (10,2)]
+ */
+static std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > parseLangReportsFromStr(const char*strLine)
+{
+	char tmpLine[256];
+    std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > retm;
+	strncpy(tmpLine, strLine, 256);
+	char *st = tmpLine;
+	while(true){
+		char *tkEnd = strchr(st, ',');
+		if(tkEnd != NULL) {
+			*tkEnd = '\0';
+		}
+		unsigned int t, f, s;
+        bool bparsed = false;
+        if(strchr(st, ':') == NULL){
+            if(sscanf(st, "%u %x", &f, &s) == 2){
+                t = dft_getTypeFromId(s);
+                bparsed = true;
+            }
+        }
+        else{
+            if(sscanf(st, "%u %x:%x", &f, &t, &s) == 3){
+                bparsed = true;
+            }
+        }
+        if(bparsed) retm.push_back(make_pair(f, std::make_pair(t, s)));
+		if(tkEnd == NULL) break;
+		st = tkEnd + 1;
+	}
+	return retm;
+}
+
+/**
+ * reverse process of the func above.
+ */
+static std::string formLangReportsStr(std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > >& langReports)
+{
+	ostringstream oss;
+	for(unsigned i=0; i< langReports.size(); i++){
+		oss<< (int)langReports[i].first<< " " << std::hex<< std::showbase<< (int)langReports[i].second.first<< ":" << (int)langReports[i].second.second << std::dec<< std::noshowbase << ",";
+	}
+	return oss.str();
+}
+
+static bool parseReportFilter(const char *strLine, std::map<std::pair<unsigned int, unsigned int>, int> &filter)
+{
+    char tmpLine[MAX_PATH];
+    strncpy(tmpLine, strLine, MAX_PATH);
+    char *st = tmpLine;
+    unsigned char tmpCh;
+    while(true){
+        char *ed = strchr(st, ',');
+        if(ed != NULL) *ed = '\0';
+        unsigned int t, f;
+        int s;
+        bool bparsed = false;
+        if(strchr(st, ':') == NULL){
+            if(sscanf(st, "%x %d", &f, &s) == 2){
+                t = dft_getTypeFromId(f);
+                bparsed = true;
+            }
+        }
+        else{
+            if(sscanf(st, "%x:%x %d", &t, &f, &s) == 3){
+                bparsed = true;
+            }
+        }
+        if(bparsed) filter[make_pair(t, f)] = s;
+        if(ed == NULL) break;
+        st = ed + 1;
+    }
+    return true;
+}
+static std::string formReportFilterStr(std::map<std::pair<unsigned int, unsigned int>, int> &filter)
+{
+    std::ostringstream oss;
+    for(std::map<std::pair<unsigned int, unsigned int>, int>::const_iterator it=filter.begin(); it != filter.end(); it++){
+        oss<< std::hex<< std::showbase<< it->first.first<< ":"<< it->first.second << " "<< std::dec<< std::noshowbase<< it->second <<",";
+    }
+    return oss.str();
+}
 
 const char szIoacasDir[]="./ioacas/";
 ConfigRoom g_AutoCfg(((string)szIoacasDir + "SysFunc.cfg").c_str());
@@ -37,6 +138,8 @@ LoggerId g_logger;
 
 std::map<unsigned long,ProjRecord_t> NewReportedID;
 pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
+
+
 /**
  * TODO 两个参数的含义还是不够明确，不知道怎么写这个函数.
  */
@@ -49,9 +152,13 @@ int GetDLLVersion(char *p, int &length)
     return 1;
 }
 
-
 static void initGlobal(BufferConfig &myBufCfg)
 {
+	char szLangReports[256] = "14 0x20,";
+    char szLangReportFilter[256] = "0x20 99,";
+
+    Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
+    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
@@ -64,6 +171,8 @@ static void initGlobal(BufferConfig &myBufCfg)
 
     myBufCfg.waitLength *= 16000;
 	
+	g_mLangReports = parseLangReportsFromStr(szLangReports);
+    parseReportFilter(szLangReportFilter, g_mLangReportFilter);
 	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
 	if(m_TSI_SaveTopDir[tmpLen - 1] != '/'){
 		m_TSI_SaveTopDir[tmpLen] = '/';
@@ -80,6 +189,8 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bDiscardable)
             LOG4Z_VAR(g_bSaveAfterRec)
+            LOG4Z_VAR(formLangReportsStr(g_mLangReports))
+            LOG4Z_VAR(formReportFilterStr(g_mLangReportFilter).c_str())
             LOG4Z_VAR(g_AutoCfg.configFile)
             LOG4Z_VAR(myBufCfg.waitSecondsStep)
             LOG4Z_VAR(myBufCfg.waitSeconds)
@@ -331,7 +442,7 @@ bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir,
 }
  #endif
 
-bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned &len)
+bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
 {
     unsigned long &pid = result.m_pDataUnit[0]->m_iPCBID;
     int confidence = (int)result.m_fLikely;
@@ -350,7 +461,11 @@ bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned 
         }
     }
     
-    if(bRep){
+    bool brep = false;
+    if(g_mLangReportFilter.find(make_pair(result.m_iAlarmType, result.m_iTargetID)) != g_mLangReportFilter.end() && g_mLangReportFilter[make_pair(result.m_iAlarmType, result.m_iTargetID)] <= result.m_fLikely){
+        brep = true;
+    }
+    if(brep){
         // only support lang report.
         result.m_iTargetID |= 0x200;
         g_ReportResultAddr(g_iModuleID, &result);

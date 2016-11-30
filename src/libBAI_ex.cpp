@@ -124,12 +124,13 @@ static bool bamp_loadLocalLib()
 static bool bamp_loadNewLib(const char *libFile)
 {
     pthread_mutex_lock(&g_BampMHdlLock);
-    BAI_Code err = BAI_LoadIndex(libFile, g_ppBampMHdl);
+    BAI_Code err = BAI_LoadIndex(libFile, g_ppBampHandle);
     pthread_mutex_unlock(&g_BampMHdlLock);
     if(err != BAI_OK){
         BLOGE("failed to load libfile: %s", g_szBampLibFile);
         return false;
     }
+    return true;
 }
 static bool bamp_saveNewLib()
 {
@@ -240,8 +241,8 @@ bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, s
     item.pcDataBuffer = pdata;
     item.iBufferSize = lensz;
     item.iDataType = 0;
-    //BLOGT("saved audio segment before bamp match call, file: %s.", savebinaryData(pid, item.pcDataBuffer, item.iBufferSize).c_str());
     pthread_mutex_lock(&g_BampHdlLock);
+    BLOGT("saved audio segment before bamp match call, file: %s.", savebinaryData(pid, item.pcDataBuffer, item.iBufferSize).c_str());
     BAI_Code err = BAI_Retrieval_Partly_VAD(&item, 1, pRes, g_ppBampHandle);
     pthread_mutex_unlock(&g_BampHdlLock);
     if(err != BAI_OK){
@@ -258,11 +259,11 @@ bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, s
     desdata.m_iDataLen = len1;
     desdata.m_pData = pcm1;
     if(pRes == NULL){
-        BLOGT("%sbamp_match no retrieval rusult from library.", oss.str().c_str());
+        BLOGT("%sbamp_match no retrieval result from library. pRes==NULL.", oss.str().c_str());
     }
     else{
         if(pRes->iResultNum == 0){
-            BLOGT("%sbamp_match no retrieval rusult from library.", oss.str().c_str());
+            BLOGT("%sbamp_match no retrieval result from library. pRes->iResultNum==0", oss.str().c_str());
         }
         else{
             float fOffset = ((float)preLen) / 16000;
@@ -276,23 +277,23 @@ bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, s
                 if(curhit.fMatchedRate < g_fReportBampThrd){
                     continue;
                 }
-                if(curhit.iLibraryID % 2){
-                    desres.m_iAlarmType = g_uBampFDServType;
-                }
-                else{
+                oss.seekp(stpos);
+                oss<< " CfgName=" << curhit.acAudioUrl;
+		sscanf(curhit.acAudioUrl, "%u", &desres.m_iTargetID);
+                if(desres.m_iTargetID % 2){
                     desres.m_iAlarmType = g_uBampJCServType;
                 }
-                curhit.iLibraryID /= 2;
-                desres.m_iTargetID = curhit.iLibraryID;
+                else{
+                    desres.m_iAlarmType = g_uBampFDServType;
+                }
+                desres.m_iTargetID /= 2;
                 desres.m_iHarmLevel = 0;
                 desres.m_fTargetMatchLen = curhit.fDurationS;
                 desres.m_fLikely = curhit.fMatchedRate;
                 desres.m_fSegLikely[0] = curhit.fMatchedRate;
                 desres.m_fSegPosInPCB[0] = fOffset + curhit.fTimeStartInTestS;
                 desres.m_fSegPosInTarget[0] = curhit.fTimeStartInWaveS;
-                oss.seekp(stpos);
                 funcBampSubmitResult(curtime, &desres, oss);
-                oss<< " CfgName=" << curhit.acAudioUrl;
                 oss.put('\0');
                 BLOGI("%s", oss.str().c_str());
                 bHit = true;

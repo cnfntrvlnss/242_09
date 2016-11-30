@@ -18,8 +18,29 @@ static bool g_bInitialized = false;
 static unsigned int g_iModuleID;
 
 static ReceiveResult g_ReportResultAddr;
-unsigned short g_uLangServType = 0x97;
+const unsigned int g_uVADType = 0x97;
+const unsigned int g_uVADID = 0x01;
+const unsigned int g_uMusicType = 0x97;
+const unsigned int g_uMusicID = 0x02;
+const unsigned int g_uLangWeirType = 0x97;
+const unsigned int g_uLangWeirID = 0x20; 
+const unsigned int g_uLangTurkType = 0x9a;
+const unsigned int g_uLangTurkID = 0x30;
+const unsigned int g_uLangAlabType = 0x9b;
+const unsigned int g_uLangAlabID = 0x40;
 const unsigned short g_uSpkServType = 0x92;
+unsigned dft_getTypeFromId(unsigned int id)
+{
+    if(id == g_uLangWeirID) return g_uLangWeirType;
+    else if(id == g_uLangTurkID) return g_uLangTurkType;
+    else if(id == g_uLangAlabID) return g_uLangAlabType;
+    else if(id == g_uVADID) return g_uVADType;
+    else if(id == g_uMusicID) return g_uMusicType;
+    else return g_uLangWeirType;
+}
+
+std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
+static std::map<std::pair<unsigned int, unsigned int>, int> g_mLangReportFilter;
 
 const char szIoacasDir[]="./ioacas/";
 ConfigRoom g_AutoCfg(((string)szIoacasDir + "SysFunc.cfg").c_str());
@@ -37,6 +58,7 @@ pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
 //////////////////---bamp---
 static bool g_bUseBamp = false;
 static unsigned g_uBampFixedLen = 3.0 * PCM_ONESEC_LEN;
+
 
 /**
  * TODO 两个参数的含义还是不够明确，不知道怎么写这个函数.
@@ -307,24 +329,22 @@ int SendData2DLL(WavDataUnit *p)
     prj.data = p->m_pData;
     prj.len = p->m_iDataLen;
     bool recvRet = recvProjSegment(prj, !g_bDiscardable);
-    LOG_TRACE(g_logger, szHead<< "have put data to GlobalBuffer.");
-
-	struct timeval tmval;
+    struct timeval tmval;
     gettimeofday(&tmval, NULL);
-    bool bBampHit = false;
-    if(g_bUseBamp){
+    if(recvRet && g_bUseBamp){
+	    LOG_TRACE(g_logger, szHead<< "have put data to GlobalBuffer.");
         char *recBuf1 = NULL;
         unsigned recLen1 = 0;
         char *recBuf2 = NULL;
         unsigned recLen2 = 0;
         std::vector<DataBlock> storedData;
-        ProjectBuffer* ptrBuf = obtainBuffer(p->m_iPCBID);
+        ProjectBuffer* ptrBuf = obtainBuffer(prj.pid);
         unsigned dataOffset = 0;
         if(ptrBuf) dataOffset = ptrBuf->getBampEndPos();
-        if(p->m_iDataLen >= g_uBampFixedLen){
+        if(prj.len >= g_uBampFixedLen){
             // use the data of length p->m_iDataLen.
-            recBuf1 = p->m_pData;
-            recLen1 = p->m_iDataLen;
+            recBuf1 = prj.data;
+            recLen1 = prj.len;
         }
         else if(ptrBuf){
             ptrBuf->getData(storedData);
@@ -375,11 +395,12 @@ int SendData2DLL(WavDataUnit *p)
                 recLen1 = recLen;
             }
             if(recBuf1){
-                if(bamp_match(p->m_iPCBID, recBuf1, recLen1, dataOffset, tmval))
+		bool bBampHit = false;
+                if(bamp_match(prj.pid, recBuf1, recLen1, dataOffset, tmval))
                 {
                     bBampHit = true;
                 }
-                ptrBuf->setBampResult(dataOffset, recLen1, bBampHit);
+                if(ptrBuf) ptrBuf->setBampResult(dataOffset, recLen1, bBampHit);
             }
             if(recBuf){
                 free(recBuf);
@@ -390,6 +411,7 @@ int SendData2DLL(WavDataUnit *p)
         if(ptrBuf != NULL) returnBuffer(ptrBuf);
         LOGFMT_TRACE(g_logger, "%s ElapseInBamp %ld %ld    %ld %ld", szHead, tmval0.tv_sec, tmval0.tv_usec, tmval.tv_sec, tmval.tv_usec);
     }
+
     return 0;
 }
 
@@ -472,7 +494,7 @@ void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, ostr
 }
 
 //void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, ostream &oss)
-bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned &len)
+bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
 {
     unsigned long &pid = result.m_pDataUnit[0]->m_iPCBID;
     int confidence = (int)result.m_fLikely;
@@ -491,10 +513,14 @@ bool reportIoacasResult(CDLLResult &result, bool bRep, char *writeLog, unsigned 
         }
     }
     
-    if(bRep){
-        if(alarmType == g_uLangServType) result.m_iTargetID |= 0x200;
+    bool brep = false;
+    if(g_mLangReportFilter.find(make_pair(result.m_iAlarmType, result.m_iTargetID)) != g_mLangReportFilter.end() && g_mLangReportFilter[make_pair(result.m_iAlarmType, result.m_iTargetID)] <= result.m_fLikely){
+        brep = true;
+    }
+    if(brep){
+        result.m_iTargetID |= 0x200;
         g_ReportResultAddr(g_iModuleID, &result);
-        if(alarmType == g_uLangServType) result.m_iTargetID &= ~0x200;
+        result.m_iTargetID &= ~0x200;
         const char* debugDir = "ioacas/debug/";
         if(if_directory_exists(debugDir)){
             char wholePath[MAX_PATH];
