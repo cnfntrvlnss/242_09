@@ -172,6 +172,6 @@ bool make_directorys(const char *mypath);
 typedef bool (*FuncProcessFile)(const char*, const char*);
 unsigned procFilesInDir(const char* szDir, FuncProcessFile addr);
 bool copyFile(const char* src, const char* des);
-
+bool copyFile_S(const char* src, const char* des);
 
 #endif

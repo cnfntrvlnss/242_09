@@ -5,6 +5,7 @@
     > Created Time: Wed 08 Jun 2016 09:26:26 PM CST
  ************************************************************************/
 
+#include "libBAI_ex.h"
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -34,7 +35,6 @@ using namespace std;
 #include "wav/Voc2Wav.h"
 #include "../include/interface242.h"
 #include "libBAI.h"
-#include "libBAI_ex.h"
 #include "socket_ex.h"
 
 #include "protosrc/2.6/FixedAudioModel.pb.h"
@@ -73,132 +73,77 @@ SummitBampResult funcBampSubmitResult;
 const unsigned short g_uBampFDServType = 0xc8;
 const unsigned short g_uBampJCServType = 0xc3;
 static char g_szBampCfgFile[MAX_PATH] = "ioacas/Bamp.cfg";
-static unsigned g_uBampThreadNum = 1;
+static unsigned g_uBampThreadNum = 16;
+static char g_szBampLibFile[MAX_PATH] = "ioacas/output/database.dat";
+//static time_t g_BampLibLastTime = 0;
+
+#if 0
 static void * g_pBampHandle = NULL;
 static void** g_ppBampHandle = &g_pBampHandle;
 pthread_mutex_t g_BampHdlLock = PTHREAD_MUTEX_INITIALIZER;
 static void *g_pBampMHdl = NULL;
 static void **g_ppBampMHdl = &g_pBampMHdl;
 static pthread_mutex_t g_BampMHdlLock = PTHREAD_MUTEX_INITIALIZER;
-static char g_szBampLibFile[MAX_PATH] = "ioacas/output/database.dat";
-static time_t g_BampLibLastTime = 0;
-static bool g_bHasModel = false;
-static pthread_mutex_t g_HasModelLock = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
-
-
-static map<unsigned, SampleInfoStruct> g_mBampSamples;
-
-void *buildIndexProcess(void * param);
-
-static bool bamp_loadLocalLib()
+/*
+BampMatchObject::BampMatchObject()
 {
-    struct stat statbuf;
-    if(stat(g_szBampLibFile, &statbuf) < 0){
-        BLOGD("cannot find libfile %s", g_szBampLibFile);
-        return false;
-    } 
-    bool ret = true;
-    time_t curtime = statbuf.st_mtime;
-    if(g_BampLibLastTime != curtime ){
-        pthread_mutex_lock(&g_BampHdlLock);
-        BAI_Code err = BAI_LoadIndex(g_szBampLibFile, g_ppBampHandle);
-        pthread_mutex_unlock(&g_BampHdlLock);
+    threadId = pthread_self();
+    BAI_Code err = BAI_Open(&(this->hdl));
+    if(err != BAI_OK){
+        BLOGE("failed to open one session of bamp match, err: %d.", err);
+        this->bOpened = false;
+        return;
+    }
+    bHasModel = false;
+}
+*/
+BampMatchObject::BampMatchObject(const char* libFile)
+{
+    this->threadId = pthread_self();
+    this->hdl = NULL;
+    while(true){
+        BAI_Code err = BAI_Open(&(this->hdl));
         if(err != BAI_OK){
-            BLOGE("failed to load file %s.", g_szBampLibFile);
-            ret = false;
+            BLOGE("failed to open one session of bamp match, err: %d.", err);
+            this->bOpened = false;
+            break;
         }
-        else{
-            g_BampLibLastTime = curtime;
-            pthread_mutex_lock(&g_HasModelLock);
-            g_bHasModel = true;
-            pthread_mutex_unlock(&g_HasModelLock);
+
+        this->bHasModel = false;
+        FILE *fp = fopen(libFile, "rb");
+        if(fp == NULL) break;
+        fclose(fp);
+        err = BAI_LoadIndex(libFile, &(this->hdl));
+        if(err != BAI_OK){
+            BLOGE("failed to load libfile %s, err: %d.", libFile, err);
+            break;
         }
+        this->bHasModel = true;
+        break;
     }
-    else{
-        ret = false;
+    
+    BLOGI("have created one BampMatch object, handle: %lx; thread: %lu; bOpened: %d; bHasMode: %d.", this->hdl, this->threadId, this->bOpened, this->bHasModel);
+}
+BampMatchObject::~BampMatchObject()
+{
+    BAI_Code err = BAI_Close(&(this->hdl));
+    if(err != BAI_OK){
+        BLOGE("failed to close session %x, err: %d.", this->hdl, err);
     }
-    return ret;
 }
 
-static bool bamp_loadNewLib(const char *libFile)
+bool BampMatchObject::loadModel(const char *libFile)
 {
-    pthread_mutex_lock(&g_BampMHdlLock);
-    BAI_Code err = BAI_LoadIndex(libFile, g_ppBampHandle);
-    pthread_mutex_unlock(&g_BampMHdlLock);
+    AutoLock(this->lock);
+    BAI_Code err = BAI_LoadIndex(libFile, &(this->hdl));
     if(err != BAI_OK){
-        BLOGE("failed to load libfile: %s", g_szBampLibFile);
+        BLOGE("failed to load libfile %s, err: %d.", libFile, err);
         return false;
     }
+    if(!this->bHasModel) this->bHasModel = true;
     return true;
-}
-static bool bamp_saveNewLib()
-{
-
-}
-
-bool bamp_rlse()
-{
-    BAI_Code err = BAI_Close(g_ppBampHandle);
-    if(err != BAI_OK){
-        BLOGE("failed to close one session, err: %d.", err);
-        return false;
-    }
-    err = BAI_Close(g_ppBampMHdl);
-    if(err != BAI_OK){
-        BLOGE("failed to close one session, err: %d.", err);
-        return false;
-    }
-    err = BAI_Exit();
-    if(err != BAI_OK){
-        BLOGE("failed to exit bamp.");
-        return false;
-    }
-    return true;
-}
-
-static void * UpdateLibraryThread(void *param);
-bool bamp_init(SummitBampResult callbck)
-{
-    BLOGI("starting init BAI.");
-    BAI_Code err = BAI_Init(g_szBampCfgFile, g_uBampThreadNum);
-    if(err != BAI_OK){
-      BLOGE("failed to initialize  bamp engine. err: %d.", err);   
-        return false;
-    }
-    err = BAI_Open(g_ppBampHandle);
-    if(err != BAI_OK){
-        BLOGE("failed to open one session of bamp match, err: %d.", err);
-        BAI_Exit();
-        return false;
-    }
-    err = BAI_Open(g_ppBampMHdl);
-    if(err != BAI_OK){
-        BLOGE("failed to open one session of bamp match, err: %d.", err);
-        BAI_Exit();
-        return false;
-    }
-    if(bamp_loadLocalLib()){
-        BLOGI("have load first library from %s.", g_szBampLibFile);
-    }
-    BLOGI("finishing init BAI.");
-    funcBampSubmitResult = callbck;
-    pthread_t pthd_id;
-    pthread_attr_t threadAttr;
-    pthread_attr_init(&threadAttr);
-    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-    int retcrt = pthread_create(&pthd_id, &threadAttr, UpdateLibraryThread, NULL);
-    pthread_attr_destroy(&threadAttr);
-    if(retcrt != 0){
-        BLOGE("fail to create offlinethread.err: %d", retcrt);
-        bamp_rlse();
-        return false;
-    }
-    return true;
-}
-
-static void process_bai_resultlist(unsigned long pid, short* pcmData, unsigned pcmLen, BAI_ResultList* pres)
-{
 }
 
 static string savebinaryData(unsigned long pid, char* data, unsigned len)
@@ -214,16 +159,13 @@ static string savebinaryData(unsigned long pid, char* data, unsigned len)
     saveWave(data, len, filePath);
     return filePath;
 }
-//bool bamp_match(unsigned long pid, short *pcmData, unsigned pcmLen, unsigned preLen, struct timeval curtime)
-bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime)
+
+bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime)
 {
+    AutoLock mylock(this->lock);
     ostringstream oss;
     oss<< "PID=" << pid<< " "<< "WaveLen="<< (len1) / 16000<< " Offset="<< preLen / 16000<< " ";
-    bool bHasModel = false;
-    pthread_mutex_lock(&g_HasModelLock);
-    bHasModel = g_bHasModel;
-    pthread_mutex_unlock(&g_HasModelLock);
-    if(!bHasModel){
+    if(!this->bHasModel){
         BLOGT("%sbamp_match no library to use.", oss.str().c_str());
         return false;
     }
@@ -241,10 +183,8 @@ bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, s
     item.pcDataBuffer = pdata;
     item.iBufferSize = lensz;
     item.iDataType = 0;
-    pthread_mutex_lock(&g_BampHdlLock);
     BLOGT("saved audio segment before bamp match call, file: %s.", savebinaryData(pid, item.pcDataBuffer, item.iBufferSize).c_str());
-    BAI_Code err = BAI_Retrieval_Partly_VAD(&item, 1, pRes, g_ppBampHandle);
-    pthread_mutex_unlock(&g_BampHdlLock);
+    BAI_Code err = BAI_Retrieval_Partly_VAD(&item, 1, pRes, &(this->hdl));
     if(err != BAI_OK){
         BLOGE("%sfail to call BAI_Retrieval_Partly, err: %d.", oss.str().c_str(), err);
         return false;
@@ -306,6 +246,165 @@ bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, s
     
     return bHit;
 }
+
+vector<BampMatchObject* > g_AllBampObjects;
+static LockHelper g_BampLock;
+static pthread_key_t g_BampHandleKey;
+
+static map<unsigned, SampleInfoStruct> g_mBampSamples;
+
+//TODO return true if all handles succeed.
+static inline bool bamp_loadNewLib(const char* libFile)
+{
+    bool ret = true;
+    AutoLock lock(g_BampLock);
+    vector<BampMatchObject*>::iterator it = g_AllBampObjects.begin();
+    for(; it!=g_AllBampObjects.end(); it++){
+        (*it)->lock.lock();
+        if(!(*it)->loadModel(libFile)){
+            ret = false;
+        }
+        (*it)->lock.unLock();
+    }
+    return ret;
+}
+
+void *buildIndexProcess(void * param);
+
+#if 0
+static bool bamp_loadLocalLib()
+{
+    struct stat statbuf;
+    if(stat(g_szBampLibFile, &statbuf) < 0){
+        BLOGD("cannot find libfile %s", g_szBampLibFile);
+        return false;
+    } 
+    bool ret = true;
+    time_t curtime = statbuf.st_mtime;
+    if(g_BampLibLastTime != curtime ){
+        pthread_mutex_lock(&g_BampHdlLock);
+        BAI_Code err = BAI_LoadIndex(g_szBampLibFile, g_ppBampHandle);
+        pthread_mutex_unlock(&g_BampHdlLock);
+        if(err != BAI_OK){
+            BLOGE("failed to load file %s.", g_szBampLibFile);
+            ret = false;
+        }
+        else{
+            g_BampLibLastTime = curtime;
+        }
+    }
+    else{
+        ret = false;
+    }
+    return ret;
+}
+
+static bool bamp_loadNewLib(const char *libFile)
+{
+    pthread_mutex_lock(&g_BampMHdlLock);
+    BAI_Code err = BAI_LoadIndex(libFile, g_ppBampHandle);
+    pthread_mutex_unlock(&g_BampMHdlLock);
+    if(err != BAI_OK){
+        BLOGE("failed to load libfile: %s", g_szBampLibFile);
+        return false;
+    }
+    return true;
+}
+static inline bool bamp_rlse()
+{
+    BAI_Code err;
+    err = BAI_Exit();
+    if(err != BAI_OK){
+        BLOGE("failed to exit bamp.");
+        return false;
+    }
+    return true;
+}
+#endif
+
+BampMatchObject* openBampHandle()
+{
+    BampMatchObject* ret = (BampMatchObject*)pthread_getspecific(g_BampHandleKey);
+    if(ret == NULL){
+        ret = new BampMatchObject(g_szBampLibFile);
+        if(!ret->bOpened){
+            delete ret;
+            ret = NULL;
+        }
+        else{
+            pthread_setspecific(g_BampHandleKey, ret);
+            AutoLock lock(g_BampLock);
+            g_AllBampObjects.push_back(ret);
+        }
+    }
+    return ret;
+}
+static void closeBampHandle(void* hdl){
+    AutoLock lock(g_BampLock);
+    BampMatchObject* pHdl = (BampMatchObject*)hdl;
+    vector<BampMatchObject*>::iterator it = g_AllBampObjects.begin();
+    for(; it != g_AllBampObjects.end(); it++){
+        if(*it == pHdl) break;
+    }
+    if(it == g_AllBampObjects.end()){
+        LOGE("in closeBampHandle, handle %x is not an opened handle.");
+        assert(false);
+    }
+    else{
+        g_AllBampObjects.erase(it);
+        delete pHdl;
+        if(g_AllBampObjects.size() == 0){
+        }
+    }
+}
+
+static void * UpdateLibraryThread(void *param);
+bool bamp_init(SummitBampResult callbck)
+{
+    BLOGI("starting init BAI.");
+    BAI_Code err = BAI_Init(g_szBampCfgFile, g_uBampThreadNum);
+    if(err != BAI_OK){
+      BLOGE("failed to initialize  bamp engine. err: %d.", err);   
+        return false;
+    }
+    int ierr = pthread_key_create(&g_BampHandleKey, closeBampHandle);
+    if(ierr != 0){
+        LOG_ERROR(g_logger, "fail to create BampHandleKey, error: "<< ierr);
+        return false;
+    }
+    BLOGI("finishing init BAI.");
+    funcBampSubmitResult = callbck;
+    pthread_t pthd_id;
+    pthread_attr_t threadAttr;
+    pthread_attr_init(&threadAttr);
+    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
+    int retcrt = pthread_create(&pthd_id, &threadAttr, UpdateLibraryThread, NULL);
+    pthread_attr_destroy(&threadAttr);
+    if(retcrt != 0){
+        BLOGE("fail to create UpdateLibraryThread. err: %d", retcrt);
+    }
+    return true;
+}
+
+bool bamp_rlse()
+{
+    AutoLock mylock(g_BampLock);
+    if(g_AllBampObjects.size() > 0){
+        BLOGE("in bamp_rlse, can't release Bamp with %u handles opened.", g_AllBampObjects.size());
+        return false;
+    }
+    BAI_Code err = BAI_Exit();
+    if(err != BAI_OK){
+        BLOGE("failed to exit bamp.");
+        return false;
+    }       
+    return true;
+}
+/*
+static void process_bai_resultlist(unsigned long pid, short* pcmData, unsigned pcmLen, BAI_ResultList* pres)
+{
+}
+*/
 
 static bool saveBinaryFile(const char* fname, char *pData, unsigned dataLen)
 {
@@ -407,6 +506,7 @@ static char g_szBampTaskFile[MAX_PATH] = "ioacas/BampTask";
  * update bamp library by building indexing from local samples or just loading new index.
  * TODO the offline flow needs reconsideration.
  */
+ #if 0
 void *OnecircleOffline(void *param)
 {
     if(!bamp_loadLocalLib())
@@ -430,6 +530,7 @@ void *OnecircleOffline(void *param)
     
     return NULL;
 }
+#endif
 
 //msg return data follow write needs, length of which is stored in outlen.
 bool parseModelInfo(char *msg, unsigned & outlen)
@@ -450,14 +551,18 @@ bool parseModelInfo(char *msg, unsigned & outlen)
     //load bamp library.
     LoadResult result;
     result.set_taskid(taskId);
+    
     if(!bamp_loadNewLib(modelUrl.c_str())){
         result.set_status(LoadResult::FALURE);
     }
     else{
         result.set_status(LoadResult::SUCCESS);
-        copyFile(modelUrl.c_str(), g_szBampLibFile);
-        unlink(modelUrl.c_str());
-        
+        if(!copyFile_S(modelUrl.c_str(), g_szBampLibFile)){
+            BLOGE("failed to copy new lib to subdir for persistent use. strerr: %s", strerror(errno));
+        }
+        else{
+            remove(modelUrl.c_str());
+        }
     }
     BLOGI("loadresult: %s",result.ShortDebugString().c_str());
     ostringstream oss;
@@ -498,7 +603,6 @@ bool writeMsg(int clifd, const char* buf, unsigned len)
     }
     assert(wret == len);
     return ret;
-
 }
 bool procModelFromClient(int clifd)
 {

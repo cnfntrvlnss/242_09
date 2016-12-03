@@ -332,7 +332,7 @@ int SendData2DLL(WavDataUnit *p)
     struct timeval tmval;
     gettimeofday(&tmval, NULL);
     if(recvRet && g_bUseBamp){
-	    LOG_TRACE(g_logger, szHead<< "have put data to GlobalBuffer.");
+	    LOG_TRACE(g_logger, szHead<< "arrived in GlobalBuffer and start bamp match.");
         char *recBuf1 = NULL;
         unsigned recLen1 = 0;
         char *recBuf2 = NULL;

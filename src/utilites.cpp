@@ -188,6 +188,21 @@ bool copyFile(const char* src, const char* des)
     return true;
 }
 
+bool copyFile_S(const char* src, const char* des)
+{
+    string tmpdes = (string)des + ".tmp";
+    if(!copyFile(src, tmpdes.c_str())){
+        return false;
+    } 
+    if(remove(des) != 0){
+        return false;
+    }
+    if(rename(tmpdes.c_str(), des) != 0){
+        return false;
+    }
+    return true;
+}
+
 union MyConfigItemValue{
 	bool *bvar;
 	int *ivar;
