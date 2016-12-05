@@ -253,6 +253,9 @@ static inline bool bamp_loadNewLib(const char* libFile)
 
 void *buildIndexProcess(void * param);
 
+/****
+ * the function must be called between init and rlse, 
+ */
 BampMatchObject* openBampHandle()
 {
     //if(g_BampStatus < INITED){
