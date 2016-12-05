@@ -73,32 +73,10 @@ SummitBampResult funcBampSubmitResult;
 const unsigned short g_uBampFDServType = 0xc8;
 const unsigned short g_uBampJCServType = 0xc3;
 static char g_szBampCfgFile[MAX_PATH] = "ioacas/Bamp.cfg";
-static unsigned g_uBampThreadNum = 16;
+static unsigned g_uBampThreadNum = 1;
 static char g_szBampLibFile[MAX_PATH] = "ioacas/output/database.dat";
 //static time_t g_BampLibLastTime = 0;
 
-#if 0
-static void * g_pBampHandle = NULL;
-static void** g_ppBampHandle = &g_pBampHandle;
-pthread_mutex_t g_BampHdlLock = PTHREAD_MUTEX_INITIALIZER;
-static void *g_pBampMHdl = NULL;
-static void **g_ppBampMHdl = &g_pBampMHdl;
-static pthread_mutex_t g_BampMHdlLock = PTHREAD_MUTEX_INITIALIZER;
-#endif
-
-/*
-BampMatchObject::BampMatchObject()
-{
-    threadId = pthread_self();
-    BAI_Code err = BAI_Open(&(this->hdl));
-    if(err != BAI_OK){
-        BLOGE("failed to open one session of bamp match, err: %d.", err);
-        this->bOpened = false;
-        return;
-    }
-    bHasModel = false;
-}
-*/
 BampMatchObject::BampMatchObject(const char* libFile)
 {
     this->threadId = pthread_self();
@@ -110,7 +88,7 @@ BampMatchObject::BampMatchObject(const char* libFile)
             this->bOpened = false;
             break;
         }
-
+        this->bOpened = true;
         this->bHasModel = false;
         FILE *fp = fopen(libFile, "rb");
         if(fp == NULL) break;
@@ -124,10 +102,11 @@ BampMatchObject::BampMatchObject(const char* libFile)
         break;
     }
     
-    BLOGI("have created one BampMatch object, handle: %lx; thread: %lu; bOpened: %d; bHasMode: %d.", this->hdl, this->threadId, this->bOpened, this->bHasModel);
+    BLOGI("have created one BampMatch object, handle: %lx; thread: %lu; bOpened: %d; bHasModel: %d.", this->hdl, this->threadId, this->bOpened, this->bHasModel);
 }
 BampMatchObject::~BampMatchObject()
 {
+    AutoLock(this->lock);
     BAI_Code err = BAI_Close(&(this->hdl));
     if(err != BAI_OK){
         BLOGE("failed to close session %x, err: %d.", this->hdl, err);
@@ -250,6 +229,9 @@ bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, u
 vector<BampMatchObject* > g_AllBampObjects;
 static LockHelper g_BampLock;
 static pthread_key_t g_BampHandleKey;
+enum BampStatus {UNINITED=0, INITED};
+static  BampStatus g_BampStatus = UNINITED;
+static pthread_t g_BampThreadID;
 
 static map<unsigned, SampleInfoStruct> g_mBampSamples;
 
@@ -271,59 +253,11 @@ static inline bool bamp_loadNewLib(const char* libFile)
 
 void *buildIndexProcess(void * param);
 
-#if 0
-static bool bamp_loadLocalLib()
-{
-    struct stat statbuf;
-    if(stat(g_szBampLibFile, &statbuf) < 0){
-        BLOGD("cannot find libfile %s", g_szBampLibFile);
-        return false;
-    } 
-    bool ret = true;
-    time_t curtime = statbuf.st_mtime;
-    if(g_BampLibLastTime != curtime ){
-        pthread_mutex_lock(&g_BampHdlLock);
-        BAI_Code err = BAI_LoadIndex(g_szBampLibFile, g_ppBampHandle);
-        pthread_mutex_unlock(&g_BampHdlLock);
-        if(err != BAI_OK){
-            BLOGE("failed to load file %s.", g_szBampLibFile);
-            ret = false;
-        }
-        else{
-            g_BampLibLastTime = curtime;
-        }
-    }
-    else{
-        ret = false;
-    }
-    return ret;
-}
-
-static bool bamp_loadNewLib(const char *libFile)
-{
-    pthread_mutex_lock(&g_BampMHdlLock);
-    BAI_Code err = BAI_LoadIndex(libFile, g_ppBampHandle);
-    pthread_mutex_unlock(&g_BampMHdlLock);
-    if(err != BAI_OK){
-        BLOGE("failed to load libfile: %s", g_szBampLibFile);
-        return false;
-    }
-    return true;
-}
-static inline bool bamp_rlse()
-{
-    BAI_Code err;
-    err = BAI_Exit();
-    if(err != BAI_OK){
-        BLOGE("failed to exit bamp.");
-        return false;
-    }
-    return true;
-}
-#endif
-
 BampMatchObject* openBampHandle()
 {
+    //if(g_BampStatus < INITED){
+    //    return NULL;
+    //}
     BampMatchObject* ret = (BampMatchObject*)pthread_getspecific(g_BampHandleKey);
     if(ret == NULL){
         ret = new BampMatchObject(g_szBampLibFile);
@@ -353,15 +287,14 @@ static void closeBampHandle(void* hdl){
     else{
         g_AllBampObjects.erase(it);
         delete pHdl;
-        if(g_AllBampObjects.size() == 0){
-        }
     }
 }
 
 static void * UpdateLibraryThread(void *param);
 bool bamp_init(SummitBampResult callbck)
 {
-    BLOGI("starting init BAI.");
+    AutoLock mylock(g_BampLock);
+    BLOGI("in bamp_init, starting init BAI.");
     BAI_Code err = BAI_Init(g_szBampCfgFile, g_uBampThreadNum);
     if(err != BAI_OK){
       BLOGE("failed to initialize  bamp engine. err: %d.", err);   
@@ -372,32 +305,41 @@ bool bamp_init(SummitBampResult callbck)
         LOG_ERROR(g_logger, "fail to create BampHandleKey, error: "<< ierr);
         return false;
     }
-    BLOGI("finishing init BAI.");
     funcBampSubmitResult = callbck;
-    pthread_t pthd_id;
-    pthread_attr_t threadAttr;
-    pthread_attr_init(&threadAttr);
-    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-    int retcrt = pthread_create(&pthd_id, &threadAttr, UpdateLibraryThread, NULL);
-    pthread_attr_destroy(&threadAttr);
+    g_BampStatus = INITED;
+    BLOGI("in bamp_init, finishing init BAI.");
+
+    int retcrt = pthread_create(&g_BampThreadID, NULL, UpdateLibraryThread, NULL);
     if(retcrt != 0){
         BLOGE("fail to create UpdateLibraryThread. err: %d", retcrt);
     }
+    BLOGI("in bamp_init, UpdateLibrary thread has been created.");
     return true;
 }
 
 bool bamp_rlse()
 {
     AutoLock mylock(g_BampLock);
+    pthread_cancel(g_BampThreadID);
+    pthread_join(g_BampThreadID, NULL);
+    BLOGI("in bamp_rlse, updateLibraryThread has been canceled.");
+
     if(g_AllBampObjects.size() > 0){
-        BLOGE("in bamp_rlse, can't release Bamp with %u handles opened.", g_AllBampObjects.size());
-        return false;
+        BLOGI("in bamp_rlse, there are %u matchObjects to be deleted.", g_AllBampObjects.size());
+        for(size_t idx=0; idx < g_AllBampObjects.size(); idx++){
+            delete g_AllBampObjects[idx];
+        }
+        g_AllBampObjects.clear();
+        BLOGI("in bamp_rlse, all matchObject has been deleted.");
     }
+    pthread_key_delete(g_BampHandleKey);
+    g_BampStatus = UNINITED;
     BAI_Code err = BAI_Exit();
     if(err != BAI_OK){
-        BLOGE("failed to exit bamp.");
+        BLOGE("failed to exit bamp. err: %d", err);
         return false;
     }       
+    BLOGI("in bamp_rlse, Bamp engine has exited.");
     return true;
 }
 /*

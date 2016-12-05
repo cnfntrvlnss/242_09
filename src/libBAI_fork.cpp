@@ -101,4 +101,8 @@ BAI_Code BAI_Retrieval_Partly(BAI_InputItem* inputItems, const int inputNum, BAI
     item.fDurationS = 3.0;
     return BAI_OK;
 }
+BAI_Code BAI_Retrieval_Partly_VAD(BAI_InputItem* inputItems, const int inputNum, BAI_ResultList*& resList, void** thdIdx)
+{
+    return BAI_Retrieval_Partly(inputItems, inputNum, resList, thdIdx);
+}
 
