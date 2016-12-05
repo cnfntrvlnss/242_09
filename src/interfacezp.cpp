@@ -319,7 +319,7 @@ int SendData2DLL(WavDataUnit *p)
 {
     const unsigned HEADSIZE = 100;
     char szHead[HEADSIZE];
-    snprintf(szHead, HEADSIZE, "SendData2DLL PID=%lu SIZE=%u ", p->m_iPCBID, p->m_iDataLen);
+    snprintf(szHead, HEADSIZE, "SendData2DLL<%lu> PID=%lu SIZE=%u ", pthread_self(), p->m_iPCBID, p->m_iDataLen);
     if(!g_bInitialized){
         LOG_WARN(g_logger, szHead<<"fail to receive data as ioacas being uninitialized.");
         return -1;
@@ -417,6 +417,12 @@ int SendData2DLL(WavDataUnit *p)
 
 int CloseDLL()
 {
+    if(g_bUseBamp){
+        if(!bamp_rlse()){
+            LOG_ERROR(g_logger, "fail to release bamp engine.");
+            return 1;
+        }
+    }
     ioareg_rlse();
     rlse_bufferglobal();
     return 0;
