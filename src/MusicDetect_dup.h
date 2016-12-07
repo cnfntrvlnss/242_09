@@ -9,10 +9,11 @@
 
 typedef struct MscCutInst{}* MscCutHandle;
 
-MscCutHandle openMusicCut(char *cfgFile);
-void notifyOpenEnd();
+MscCutHandle openMusicCut(const char *cfgFile);
+void finishOpenMusicCut();
 bool cutMusic(MscCutHandle hdl, short* src, unsigned iLen, short* &dst, unsigned &oLen);
 void closeMusicCut(MscCutHandle hdl);
 
 #endif
+
 

@@ -14,7 +14,7 @@ CPPPRES:=
 
 CONF:=Debug
 BDIR:=$(BDIR)/$(CONF)
-TDIR:=../test242/ioacas
+TDIR:=lib_fork
 PROGRAM:=$(TDIR)/$(PROGRAM)
 
 ifeq (Debug,$(CONF))
@@ -23,7 +23,7 @@ else
 CPPFLAGS+=-O2 -Wall
 endif
 
-LDLIBS+=-L$(TDIR) -ldllSRVADCluster -lMusicDetect -lSpeakerRecogAPI
+LDLIBS+=-lpthread -L$(TDIR) -lSpeakerRecogAPI -lMusicDetect -ldllSRVADCluster -lTLI_API
 
 .PHONY: all
 all: ${PROGRAM}

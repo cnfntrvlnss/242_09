@@ -278,8 +278,6 @@ int CloseDLL()
     return 0;
 }
 
-static vector<SpkInfo*> g_vUselessSpks;
-static pthread_mutex_t g_UselessSpksLock = PTHREAD_MUTEX_INITIALIZER;
 int AddCfg(unsigned int id, 
         const char *strName,
         const char *strConfigFile,
@@ -287,23 +285,23 @@ int AddCfg(unsigned int id,
         int iHarmLevel)
 {
     if(iType == g_uSpkServType){
-        FILE* fp = fopen(strConfigFile, "rb");
-        if(fp == NULL) {
-            LOGFMT_ERROR(g_logger, "AddCfg failed to open file: %s", strConfigFile);
-             return -30;   
-        }
-        fseek(fp, 0, SEEK_END);
-        unsigned uLen = ftell(fp);
-        fseek(fp, 0, SEEK_SET);
-        char *pData = new char[uLen];
-        if(pData == NULL){
-            LOGFMT_ERROR(g_logger, "AddCfg failed to allocate memory, size: %u", uLen);
-            fclose(fp);
-            return -40;
-        }
-        unsigned rlen = fread(pData, 1, uLen, fp);
-        fclose(fp);
-        return AddCfgByBuf(pData, uLen, id, iType, iHarmLevel);
+        //FILE* fp = fopen(strConfigFile, "rb");
+        //if(fp == NULL) {
+        //    LOGFMT_ERROR(g_logger, "AddCfg failed to open file: %s", strConfigFile);
+        //     return -30;   
+        //}
+        //fseek(fp, 0, SEEK_END);
+        //unsigned uLen = ftell(fp);
+        //fseek(fp, 0, SEEK_SET);
+        //char *pData = new char[uLen];
+        //if(pData == NULL){
+        //    LOGFMT_ERROR(g_logger, "AddCfg failed to allocate memory, size: %u", uLen);
+        //    fclose(fp);
+        //    return -40;
+        //}
+        //unsigned rlen = fread(pData, 1, uLen, fp);
+        //fclose(fp);
+        //return AddCfgByBuf(pData, uLen, id, iType, iHarmLevel);
     }
     return 0;
 }
@@ -331,17 +329,34 @@ int AddCfgByBuf(const char *pData,
     return 0;
 }
 
-#if 0
+#if 1
 static bool addCfgPerFile(const char* szDir, const char* filename)
 {
-    SpkInfoChd* tmpSpk = new SpkInfoChd(0);
-    if(!tmpSpk->fromStr(filename)){
+    if(!checkSpkName(filename)){
         return false;
     }
-    if(AddCfg(tmpSpk->spkId, "", concatePath(szDir, filename).c_str(), g_uSpkServType, tmpSpk->m_iHarmLevel) > 0){
-        return true;
+    string filePath = concatePath(szDir, filename);
+    FILE *fp = fopen(filePath.c_str(), "rb");
+    if(fp == NULL){
+        LOGFMT_ERROR(g_logger, "in addCfgPerFile, failed to open file: %s", filePath.c_str());
+        return false;
     }
-    return false;
+    char *mdlData = NULL;
+    unsigned mdlLen = 0;
+    fseek(fp, 0, SEEK_END);
+    mdlLen = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    mdlData = new char[mdlLen];
+    size_t retr = fread(mdlData, 1, mdlLen, fp);
+    bool ret = false;
+    if(retr == mdlLen){
+        ret = addSpkSample(filename, mdlData, mdlLen);
+    }
+    else{
+        LOGFMT_ERROR(g_logger, "in addCfgPerFile, failed to read file: %s, real: %u; read: %u.", filePath.c_str(), mdlLen, retr);
+    }
+    delete mdlData;
+    return ret;
 }
 #endif
 
@@ -349,9 +364,9 @@ static bool addCfgPerFile(const char* szDir, const char* filename)
 int AddCfgByDir(int iType, const char *strDir)
 {
     if(iType == g_uSpkServType){
-        //int iRet = procFilesInDir(strDir, addCfgPerFile);
-        //LOGFMT_INFO(g_logger, "AddCfgByDir finishing load spks in dir: %s, SPKCount=%d.", strDir, iRet);
-        //return iRet;
+        int iRet = procFilesInDir(strDir, addCfgPerFile);
+        LOGFMT_INFO(g_logger, "AddCfgByDir finishing load spks in dir: %s, SPKCount=%d.", strDir, iRet);
+        return iRet;
     }
     return 0;
 }
@@ -396,52 +411,6 @@ int GetDataNum4Process(int iType[], int num[])
     return 0;
 }
 
-/////////////////////recog process///////////////////
-//
-/**
- * 文件存储路径为：topdir/200109/01/increNum_ID_username_confidence.wav
- * 文件存储路径写到savedname指向的内存中，作为结果返回。
- */
- #if 0
-bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir, unsigned long id, unsigned *type, unsigned *userId, int *confidence)
-{
-	time_t timer;
-	struct tm *tmif;
-	time(&timer);
-	tmif = localtime(&timer);
-	char fipnt[10], sepnt[5];
-	snprintf(fipnt, 10, "%04d%02d%02d", tmif->tm_year+1900, tmif->tm_mon+1, tmif->tm_mday);
-	snprintf(sepnt, 5, "%02d", tmif->tm_hour);
-    savedname[0] = '\0';
-    int curCnt = 0;
-    if(topDir != NULL){
-        if(subDir == NULL){
-            curCnt = sprintf(savedname, "%s%s", topDir, fipnt);
-            if(access(savedname, F_OK) == -1) mkdir(savedname, 0775);
-            curCnt += sprintf(savedname+ curCnt, "/%s/", sepnt);
-            if(access(savedname, F_OK) == -1) mkdir(savedname, 0775);
-        }
-        else{
-            curCnt = sprintf(savedname, "%s%s/", topDir, subDir);
-            if_directory_exists(savedname, true); //create subdir if not exists.
-        }
-    }
-    curCnt += sprintf(savedname + curCnt, "%s%s%02d%02d_%lu", fipnt, sepnt, tmif->tm_min, tmif->tm_sec, id);
-    if(type != NULL){
-        curCnt += sprintf(savedname + curCnt, "_%u", *type);
-    }
-    if(userId != NULL){
-        curCnt += sprintf(savedname + curCnt, "_%u", *userId);
-    }
-    if(confidence != NULL){
-        curCnt += sprintf(savedname + curCnt, "_%d", *confidence);
-    }
-
-    curCnt += sprintf(savedname + curCnt, ".wav");
-	return true;
-}
- #endif
-
 bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
 {
     unsigned long &pid = result.m_pDataUnit[0]->m_iPCBID;
@@ -467,6 +436,7 @@ bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
     }
     if(brep){
         // only support lang report.
+        // TODO add spkreg.
         result.m_iTargetID |= 0x200;
         g_ReportResultAddr(g_iModuleID, &result);
         result.m_iTargetID &= ~0x200;

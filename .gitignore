@@ -1,5 +1,6 @@
 /make/build*
 /make/dist*
+/make/lib*
 /test/*
 !/test/src/
 !/test/Makefile

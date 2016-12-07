@@ -9,12 +9,7 @@
 #define _IOAREG_H
 
 
-#include "dllVAD_dup.h"
-#include "MusicDetect_dup.h"
-#include "TLI_API_dup.h"
 #include "../include/interface242.h"
-#include "spk_ex.h"
-#include "dllSRVADCluster.h"
 #include "utilites.h"
 #include "commonFunc.h"
 #include "ProjectBuffer.h"
@@ -36,6 +31,9 @@ void ioareg_updateConfig();
 bool ioareg_rlse();
 bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len);
 
+bool checkSpkName(const char *name);
+bool addSpkSample(const char* name, char* data, unsigned len);
+void rmSpkSample(unsigned spkId);
 //////////////////////////////////
 typedef struct ProjectRecord{
 	ProjectRecord(const char *filepath="", time_t timemark = 0){

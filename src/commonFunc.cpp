@@ -165,7 +165,6 @@ bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir,
 	return true;
 }
 
-
 bool saveWave(char *pData, unsigned len, const char *saveFileName)
 {
     FILE *fp = fopen(saveFileName, "ab");
@@ -186,5 +185,19 @@ bool saveWave(char *pData, unsigned len, const char *saveFileName)
     }
     fclose(fp);
     return ret;
+}
+
+string g_DebugBinaryDir = "ioacas/debug/";
+string saveTempBinaryData(struct timeval curtime, unsigned long pid, char* data, unsigned len)
+{
+    char filePath[MAX_PATH];
+    if(curtime.tv_sec == 0) gettimeofday(&curtime, NULL);
+    gen_spk_save_file(filePath, g_DebugBinaryDir.c_str(), NULL, curtime.tv_sec, pid, NULL, NULL, NULL);
+    char *stSufPtr = strrchr(filePath, '.');
+    char tmpMrk[20];
+    snprintf(tmpMrk, 20, "_%lu", curtime.tv_usec);
+    insertStrAt0(stSufPtr, tmpMrk);
+    saveWave(data, len, filePath);
+    return filePath;
 }
 

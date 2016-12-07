@@ -20,8 +20,8 @@ using namespace std;
 
 #include "spkEngine.h"
 
-#define SLOGE_FMT(fmt, ...) fprintf(stderr, "ERROR "fmt, ##__VA_ARGS__)
-#define SLOGW_FMT(fmt, ...) fprintf(stderr, "WARN "fmt, ##__VA_ARGS__)
+#define SLOGE_FMT(fmt, ...) fprintf(stderr, "ERROR "fmt"\n", ##__VA_ARGS__)
+#define SLOGW_FMT(fmt, ...) fprintf(stderr, "WARN "fmt"\n", ##__VA_ARGS__)
 
 bool SpkInfo::fromStr(const char* param)
 {
@@ -32,12 +32,13 @@ bool SpkInfo::fromStr(const char* param)
 string SpkInfo::toStr() const
 {
     ostringstream oss;
-    oss<< spkId;
+    oss<< spkId << ".param";
     return oss.str();
 }
 
 class SpkInfoEx: public SpkInfo
 {
+    char flag;
 public:
     SpkInfoEx(unsigned long param1=0, char param2=0):
         SpkInfo(param1), flag(param2)
@@ -45,31 +46,19 @@ public:
     SpkInfoEx(const char* param){
         fromStr(param);
     }
-    string toStr() const;
-    bool fromStr(const char*);
-    bool operator==(const SpkInfo& oth) const;
-    char flag;
-};
-
-string SpkInfoEx::toStr() const
-{
-    ostringstream oss;
-    oss << flag;
-    return SpkInfo::toStr() + "_" + oss.str();
-}
-
-bool SpkInfoEx::fromStr(const char *param)
-{
-    string strTmp(param);
-    size_t sepIdx = strTmp.find("_");
-    if(sepIdx == string::npos){
-        return false;
+    string toStr() const{
+        ostringstream oss;
+        oss<<spkId<< "_"<< flag<< ".param";
+        return SpkInfo::toStr() + "_" + oss.str();
     }
-    SpkInfo::fromStr(strTmp.substr(0, sepIdx).c_str());
-    istringstream iss(strTmp.substr(sepIdx+1));
-    iss >> flag;
-    return true;
-}
+
+    bool fromStr(const char* param){
+        int ret = sscanf(param, "%lu_%c.param", &spkId, &flag);
+        if(ret != 2){ return false; }
+        return true;
+    }
+    bool operator==(const SpkInfo& oth) const;
+};
 
 bool SpkInfoEx::operator==(const SpkInfo& oth) const{
     if(typeid(*this) != typeid(oth)){
@@ -83,7 +72,7 @@ vector<void*> g_vecSpeakerModel;
 float defaultSpkScoreThrd = 0.0;
 pthread_rwlock_t g_SpkInfoRwlock = PTHREAD_RWLOCK_INITIALIZER;
 
-string g_strSpkMdlDir = "SpkModel/";
+string g_strSpkMdlDir = "ioacas/SpkModel/";
 
 class SLockHelper{
 public:
@@ -105,28 +94,28 @@ private:
     bool bRdlock;
 };
 
-void getAllSpkRec(vector<const SpkInfo*> &outSpks)
+void spkex_getAllSpks(vector<const SpkInfo*> &outSpks)
 {
     SLockHelper mylock(&g_SpkInfoRwlock, false);
     outSpks.clear();
     outSpks.insert(outSpks.begin(), g_vecSpkInfoPtr.begin(), g_vecSpkInfoPtr.end());
 }
 
-bool addSpkRec(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo*& oldSpk)
+bool spkex_addSpk(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo*& oldSpk)
 {
     oldSpk = NULL;
     SLockHelper mylock(&g_SpkInfoRwlock);
     assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
-    string mdlpath = g_strSpkMdlDir + spk->toStr() + ".param";
+    string mdlpath = g_strSpkMdlDir + spk->toStr();
     TITStatus err = TIT_SPKID_SAVE_MDL_IVEC(mdlData, mdlpath.c_str());
     if(err != StsNoError){
-        SLOGE_FMT("in addSpeaker, failed to save arrival data as speaker model file. SpkId=%lu; mdlLen=%u; error: %d.", spk->spkId, mdlLen, err);
+        SLOGE_FMT("in addSpeaker, failed to save arrival data as speaker model file. path=%s; mdlLen=%u; error: %d.", mdlpath.c_str(), mdlLen, err);
         return false;
     }
     void * pData;
     err = TIT_SPKID_LOAD_MDL_IVEC(pData, mdlpath.c_str());
     if(err != StsNoError){
-        SLOGE_FMT("inf addSpeaker, failed to load model from file. file=%s; error: %d.", mdlpath.c_str(), err);
+        SLOGE_FMT("in addSpeaker, failed to load model from file. file=%s; error: %d.", mdlpath.c_str(), err);
         return false;
     }
     size_t idx=0;
@@ -148,7 +137,7 @@ bool addSpkRec(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo
     return true;
 }
 
-const SpkInfo* rmSpkRec(const SpkInfo* spk)
+const SpkInfo* spkex_rmSpk(const SpkInfo* spk)
 {
     SLockHelper mylock(&g_SpkInfoRwlock);
     assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
@@ -166,14 +155,14 @@ const SpkInfo* rmSpkRec(const SpkInfo* spk)
     g_vecSpkInfoPtr.erase(g_vecSpkInfoPtr.begin() + idx);
     g_vecSpeakerModel.erase(g_vecSpeakerModel.begin() + idx);
     TIT_SPKID_DEL_MDL(delModel);
-    string mdlpath = g_strSpkMdlDir + spk->toStr() + ".param";
+    string mdlpath = g_strSpkMdlDir + spk->toStr();
     if(remove(mdlpath.c_str()) == -1){
         SLOGW_FMT("in removeSpeaker, fail to remove persistent file. file: %s.\n", mdlpath.c_str());
     }
     return delSpk;
 }
 
-bool initSpkRec(const char* cfgfile)
+bool spkex_init(const char* cfgfile)
 {
     SLockHelper mylock(&g_SpkInfoRwlock);
     TITStatus err = TIT_SPKID_INIT(cfgfile);
@@ -184,7 +173,7 @@ bool initSpkRec(const char* cfgfile)
     return true;
 }
 
-void rlseSpkRec()
+void spkex_rlse()
 {
     SLockHelper mylock(&g_SpkInfoRwlock);
     assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
@@ -204,7 +193,7 @@ void rlseSpkRec()
  *
  * TODO after return, the object pointed by spk can be deleted at any time.
  */
-bool processSpkRec(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score)
+bool spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score)
 {
     SLockHelper mylock(&g_SpkInfoRwlock, false);
     assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
@@ -235,3 +224,4 @@ bool processSpkRec(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &
     }
     return true;
 }
+

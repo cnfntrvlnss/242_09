@@ -28,7 +28,7 @@ static set<unsigned> g_setOpenedInstIndice;
 static bool g_bMscCutsInited = false;
 static pthread_mutex_t g_MscCutsLock = PTHREAD_MUTEX_INITIALIZER;
 
-MscCutHandle openMusicCut(char *cfgFile)
+MscCutHandle openMusicCut(const char *cfgFile)
 {
     pthread_mutex_lock(&g_MscCutsLock);
     if(g_uAccumMscCuts == 0){
@@ -46,20 +46,20 @@ MscCutHandle openMusicCut(char *cfgFile)
         g_setOpenedInstIndice.insert(curIdx);
     }   
     else{
-        fprintf(stderr, "ERROR in openMusicCut, the total MusicCuts already adds to MAX_MUSICCUT.\n");
+        fprintf(stderr, "ERROR in openMusicCut, the total MusicCuts already accumulate to MAX_MUSICCUT.\n");
     }
     pthread_mutex_unlock(&g_MscCutsLock);
     return ret;
 }
 
-inline void notifyOpenEnd()
+void finishOpenMusicCut()
 {
     pthread_mutex_lock(&g_MscCutsLock);
     if(!g_bMscCutsInited){
         assert(g_uAccumMscCuts > 0);
         assert(strcmp(g_szCfgFile, "") != 0);
         if(!MusicCut_Initial(g_szCfgFile, g_uAccumMscCuts)){
-            fprintf(stderr, "FATAL in notifyOpenEnd, failed initialize MusicCut engine. cfgFile: %s; threadNum: %u.\n", g_szCfgFile, g_uAccumMscCuts);
+            fprintf(stderr, "FATAL in finishOpenMusicCut, failed initialize MusicCut engine. cfgFile: %s; threadNum: %u.\n", g_szCfgFile, g_uAccumMscCuts);
             exit(1);
         }
         g_bMscCutsInited = true;
@@ -69,7 +69,6 @@ inline void notifyOpenEnd()
 
 bool cutMusic(MscCutHandle hdl, short* src, unsigned iLen, short* &dst, unsigned &oLen)
 {
-    notifyOpenEnd();
     assert(hdl - g_arrAllMscCuts < g_uAccumMscCuts);
     int olen;
     MusicCut(hdl - g_arrAllMscCuts, src, iLen, dst, olen);

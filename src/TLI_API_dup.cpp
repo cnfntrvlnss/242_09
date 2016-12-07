@@ -26,19 +26,23 @@ class LIDSpace4TLI{
     ~LIDSpace4TLI(){
         rlseTLI();
     }
-public:
-    static void initLID(){
-        pthread_mutex_lock(&onlyoneLock);
-        if(onlyone == NULL){
-            onlyone = new LIDSpace4TLI();
-            if(onlyone == NULL){
-                fprintf(stderr, "ERROR in LIDSpace4TLI::initLID, failed to create new instance of LIDSpace4TLI.\n");
-            }
-        }
-        pthread_mutex_unlock(&onlyoneLock);
-
-    }
+    friend void initLID(unsigned thrdNum);
 };
+
+unsigned g_nThreadNum = 8;
+void initLID(unsigned thrdNum)
+{
+    pthread_mutex_lock(&LIDSpace4TLI::onlyoneLock);
+    if(LIDSpace4TLI::onlyone == NULL){
+        if(thrdNum != 0)g_nThreadNum = thrdNum;
+        LIDSpace4TLI::onlyone = new LIDSpace4TLI();
+        if(LIDSpace4TLI::onlyone == NULL){
+            fprintf(stderr, "ERROR in LIDSpace4TLI::initLID, failed to create new instance of LIDSpace4TLI.\n");
+        }
+    }
+    pthread_mutex_unlock(&LIDSpace4TLI::onlyoneLock);
+}
+
 LIDSpace4TLI* LIDSpace4TLI::onlyone = NULL;
 pthread_mutex_t LIDSpace4TLI::onlyoneLock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -52,7 +56,6 @@ int g_SecondVAD=0;
 int g_bUseDetector=0;
 int g_MaxLIDLen = 3600;
 int g_MinLIDLen = 5;
-unsigned g_nThreadNum = 8;
 const unsigned MAXLINE_LEN = 100;
 
 unsigned countLinesInFile(const char *file)
@@ -84,7 +87,6 @@ void initTLI()
         snprintf(curname, 10, "%d", idx);
         g_pszAllTemplateNames[idx] = curname;
     }
-    //TLI_Init_addVAD_1(const_cast<char*>("ioacas/sysdir"), g_nTemplateNum, g_nThreadNum, g_MaxLIDLen, g_MinLIDLen, g_SecondVAD, g_bUseDetector);
     
     int tliret = TLI_Init(g_SysDirPath, g_pnAllTemplateIDs, g_pszAllTemplateNames, g_nTemplateNum, g_nThreadNum);
     if(tliret != 0){
@@ -114,7 +116,7 @@ void rlseTLI()
 
 int openTLI_dup()
 {
-    LIDSpace4TLI::initLID();
+    initLID(0);
     TLI_HANDLE hret = -1;
     int err = TLI_Open(hret);
     if(hret < 0){
@@ -160,7 +162,6 @@ void scoreTLI_dup(int hdl, short *pcmData, int pcmLen, int &resID, float &resSco
         }
         return ;
     }
-    //int err = TLI_Recognize_1(hdl, arrTemplateIDs, langNum, (void*)pcmData, pcmLen * sizeof(short), nMinSpeechSec, nMaxSpeechSec, resID, resScore, "");
     
     float scoreArr[LANGNUM_MAX];
     int langNum = g_nTemplateNum + 1;

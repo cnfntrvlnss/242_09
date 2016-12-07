@@ -32,11 +32,11 @@ public:
     unsigned long spkId;
 };
 
-void getAllSpkRec(std::vector<const SpkInfo*> &outSpks);
-bool addSpkRec(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo* &oldSpk);
-const SpkInfo* rmSpkRec(const SpkInfo* spk);
-bool initSpkRec(const char* cfgfile);
-void rlseSpkRec();
-bool processSpkRec(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score);
+void spkex_getAllSpks(std::vector<const SpkInfo*> &outSpks);
+bool spkex_addSpk(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo* &oldSpk);
+const SpkInfo* spkex_rmSpk(const SpkInfo* spk);
+bool spkex_init(const char* cfgfile);
+void spkex_rlse();
+bool spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score);
 
 #endif

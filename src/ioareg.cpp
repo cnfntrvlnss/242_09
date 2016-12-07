@@ -10,6 +10,11 @@
 #include<iostream>
 using namespace std;
 
+#include "MusicDetect.h"
+#include "dllVAD_dup.h"
+#include "TLI_API_dup.h"
+#include "spk_ex.h"
+#include "dllSRVADCluster.h"
 
 struct RecogThreadSpace{
     RecogThreadSpace(){
@@ -20,6 +25,7 @@ struct RecogThreadSpace{
     ~RecogThreadSpace(){
     }
     unsigned threadIdx;
+    struct timeval curTime;
     //drain variable in the sequence of recognization.
     CDLLResult result;
     WavDataUnit projData;
@@ -88,38 +94,76 @@ TransScore getScoreFunc(ScoreConfig *param)
 }
 
 
+/**
+ * SpkInfo for speaker template id_type_harm.param
+ */
 class SpkInfoChd: public SpkInfo
 {
+    SpkInfoChd(const SpkInfoChd&);
+    SpkInfoChd& operator=(const SpkInfoChd&);
 public:
-    SpkInfoChd(unsigned long param):
-        SpkInfo(param), servType(0x92), m_iHarmLevel(0)
-    {}
+    unsigned char servType;
+    int harmLevel;
+    SpkInfoChd(unsigned long spkId =0, unsigned char type=0, int level=0):
+        SpkInfo(spkId), servType(type), harmLevel(level)
+    { }
+    SpkInfoChd(const char *spkname)
+        :SpkInfo((unsigned long)0), servType(0), harmLevel(0)
+    {
+        fromStr(spkname);
+    }
     string toStr()const{
         ostringstream oss;
-        oss << "_"<< std::hex<< std::showbase<< servType<< std::noshowbase<< std::dec<< "_" << m_iHarmLevel;
-        return SpkInfo::toStr() + oss.str();
+        oss << spkId<<"_"<< std::hex<< std::showbase<< servType<< std::noshowbase<< std::dec<< "_" << harmLevel<< ".param";
+        return oss.str();
     }
     bool fromStr(const char* strSpk);
-    unsigned char servType;
-    int m_iHarmLevel;
 };
-
 
 bool SpkInfoChd::fromStr(const char* strSpk){
     istringstream iss(strSpk);
     char chSep;
-    unsigned long long pid;
-    unsigned servType;
-    int harmLevel;
-    if(!(iss >> pid)) return false;
+    if(!(iss >> spkId)) return false;
     if(!(iss.get(chSep) || chSep != '_')) return false;
     if(!(iss >> std::hex>> servType>> std::dec)) return false;
-    if(servType != this->servType) return false;
     if(!(iss.get(chSep) || chSep != '_')) return false;
     if(!(iss >> harmLevel)) return false;
-    this->spkId = pid;
-    this->m_iHarmLevel = harmLevel;
     return true;
+}
+
+vector<const SpkInfoChd*> g_vecPendingRemoveSpks;
+bool checkSpkName(const char *name)
+{
+    SpkInfoChd* spk = new SpkInfoChd();
+    if(!spk->fromStr(name)){
+        delete spk;
+        return false;
+    }
+    delete spk;
+    return true;
+}
+bool addSpkSample(const char* name, char* data, unsigned len)
+{
+    SpkInfoChd* spk = new SpkInfoChd();
+    if(!spk->fromStr(name)){
+        delete spk;
+        return false;
+    }
+    const SpkInfo* oldSpk;
+    bool ret = spkex_addSpk(spk, data, len, oldSpk);
+    if(oldSpk) g_vecPendingRemoveSpks.push_back(dynamic_cast<const SpkInfoChd*>(oldSpk));
+    return true;
+}
+void rmSpkSample(unsigned spkId)
+{
+    vector<const SpkInfo*> allSpks;
+    spkex_getAllSpks(allSpks);
+    for(size_t idx=0; idx < allSpks.size(); idx++){
+        if(allSpks[idx]->spkId == spkId){
+            spkex_rmSpk(allSpks[idx]);
+            g_vecPendingRemoveSpks.push_back(dynamic_cast<const SpkInfoChd*>(allSpks[idx]));
+        }
+    }
 }
 
 void ioareg_updateConfig()
@@ -195,13 +239,14 @@ bool ioareg_init()
     }
 
     if(g_bUseSpk){
-        if(!initSpkRec(szSpkCfgFile)){
+        if(!spkex_init(szSpkCfgFile)){
             LOG_ERROR(g_logger, "fail to initialize spk engine.");
             return false;
         }
         else{
             LOG_INFO(g_logger, "finish initializing spk engine.");
         }
+        getScoreFunc(&spkScoreCfg);
     }
     if(g_bSpkUseVad){
         if(!InitVADCluster(szSpkVADCfg)){
@@ -211,6 +256,7 @@ bool ioareg_init()
         LOG_INFO(g_logger, "finish initializing vad cluster engine.");
     }
 
+    initLID(g_ThreadNum);
 	g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (g_ThreadNum));
     for (int i = 0; i < g_ThreadNum; ++i)
 	{
@@ -240,7 +286,7 @@ bool ioareg_rlse()
         pthread_join(g_pthread_id[idx], NULL);
     }
 
-    if(g_bUseSpk) rlseSpkRec();
+    if(g_bUseSpk) spkex_rlse();
     if(g_bSpkUseVad) FreeVADCluster();
 
 	if (g_pthread_id != NULL)
@@ -279,6 +325,9 @@ static inline unsigned get_count(){
     return clock() - mycounter;
 }
 
+#define CREATE_clockoutput(x) ostringstream clockoutput; clockoutput<< x<< " ";
+#define PUTPER_clockoutput(x) clockoutput<< x<< get_count()<< " ";
+#define LOG_clockoutput(x) x(clockoutput.str().c_str()); 
 #else
 static inline void set_count(){
 
@@ -286,7 +335,10 @@ static inline void set_count(){
 static inline unsigned get_count(){
     return 0;
 }
-#endif
+#define CREATE_clockoutput(x)
+#define PUTPER_clockoutput(x)
+#define LOG_clockoutput(x) 
+#endif 
 
 static void vadProcess(RecogThreadSpace &rec, int hVad)
 {
@@ -343,7 +395,7 @@ static void vadProcess(RecogThreadSpace &rec, int hVad)
 
 }
 
-static void musicProcess(RecogThreadSpace &rec, MscCutHandle hMCut)
+static void musicProcess(RecogThreadSpace &rec)
 {
     char* &pData = rec.projData.m_pData;
     unsigned &dataLen = rec.projData.m_iDataLen;
@@ -366,7 +418,9 @@ static void musicProcess(RecogThreadSpace &rec, MscCutHandle hMCut)
         }
 
         set_count();
-        bool retm = cutMusic(hMCut, recBuf, recBufLen, rec.mcutBuf, rec.mcutBufLen);
+        int tmpVar;
+        bool retm = MusicCut(rec.threadIdx, recBuf, recBufLen, rec.mcutBuf, tmpVar);
+        rec.mcutBufLen = tmpVar;
         #ifdef CHECK_PERFOMANCE
         clockoutput<< "CUTMUSIC "<< recBufLen<< " "<< rec.mcutBufLen<< " "<< get_count()<< " ";
         #endif
@@ -397,7 +451,7 @@ static void musicProcess(RecogThreadSpace &rec, MscCutHandle hMCut)
     #endif
 }
 
-static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, int hTLI)
+static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
 {
     char* &pData = rec.projData.m_pData;
     unsigned &dataLen = rec.projData.m_iDataLen;
@@ -420,6 +474,7 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             break;
         }
 
+#if 0
         if(hMCut != NULL){
             set_count();
             bool retm = cutMusic(hMCut, recBuf, recBufLen, rec.mcutBuf, rec.mcutBufLen);
@@ -488,23 +543,24 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
             sprintf(WriteLog+strlen(WriteLog), "too short ");
             break;
         }
-        if(g_bUseLid){
-            int nMax;
-            float score;
-            set_count();
-            const char* debugDir = "ioacas/debug/";
-            if(if_directory_exists(debugDir)){
-                char wholePath[MAX_PATH];
-                sprintf(wholePath, "%sbeforeTLI_%lu", debugDir, pid);
-                save_binary_data(wholePath, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short), NULL);
-            }
-            scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
-            #ifdef CHECK_PERFOMANCE
-            clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
-            #endif
-            if(checkAndSetLidResSt(rec.result, nMax, score)){
-                reportIoacasResult(rec.result, WriteLog, logLen);
-            }
+#endif
+        int nMax;
+        float score;
+        /*
+        const char* debugDir = "ioacas/debug/";
+        if(if_directory_exists(debugDir)){
+            char wholePath[MAX_PATH];
+            sprintf(wholePath, "%sbeforeTLI_%lu", debugDir, pid);
+            save_binary_data(wholePath, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short), NULL);
+        }*/
+        LOG_TRACE(g_logger, "LIDREG before spkex_score, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
+        set_count();
+        scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
+        #ifdef CHECK_PERFOMANCE
+        clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
+        #endif
+        if(checkAndSetLidResSt(rec.result, nMax, score)){
+            reportIoacasResult(rec.result, WriteLog, logLen);
         }
         break;
     }
@@ -512,6 +568,79 @@ static void lidRegProcess(RecogThreadSpace &rec, MscCutHandle hMCut, int hVAD, i
     #ifdef CHECK_PERFOMANCE
     LOGFMTI(clockoutput.str().c_str());
     #endif
+}
+
+static void spkRegProcess(RecogThreadSpace &rec)
+{
+    char* &pData = rec.projData.m_pData;
+    unsigned &dataLen = rec.projData.m_iDataLen;
+    unsigned long &pid = rec.projData.m_iPCBID;
+	unsigned logLen = 0;
+#define MAX_LINE 1024
+	char WriteLog[1024];
+    logLen = 0;
+    logLen += snprintf(WriteLog+logLen, MAX_LINE - logLen,  "SPKREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
+    CREATE_clockoutput("SPKREG CHECKPERFORMANCE");
+    while(true){
+        short *recBuf = reinterpret_cast<short*>(pData);
+        unsigned recBufLen = dataLen / sizeof(short);
+        rec.mcutBufLen = 0;
+        rec.vadBufLen = 0;
+        if(recBufLen < POSITIVE_PCM_LEN)
+        {
+            logLen += snprintf(WriteLog+logLen, MAX_LINE - logLen, "too short ");
+            break;
+        }
+        if(g_bSpkUseMCut){
+            int tmpval;
+            set_count();
+            bool retmc = MusicCut(rec.threadIdx, recBuf, recBufLen, rec.mcutBuf, tmpval);
+            PUTPER_clockoutput("MUSICCUT");
+            rec.mcutBufLen = tmpval;
+            if(!retmc){ rec.mcutBufLen = 0; }
+            recBuf = rec.mcutBuf;
+            recBufLen = rec.mcutBufLen;
+            logLen += snprintf(WriteLog + logLen, MAX_LINE - logLen, "MCutLen=%us ", recBufLen / PCM_ONESEC_SMPS);
+            if(recBufLen < POSITIVE_PCM_LEN)
+            {
+                logLen += sprintf(WriteLog+logLen, "too short ");
+                break;
+            }
+        }
+        if(g_bSpkUseVad){
+            set_count();
+            int tmpval;
+            bool retvad = VADBuffer(true, recBuf, recBufLen, rec.vadBuf, tmpval);
+            PUTPER_clockoutput("VADCUT");
+            rec.vadBufLen = tmpval;
+            if(!retvad) rec.vadBuf = 0;
+            recBuf = rec.vadBuf;
+            recBufLen = rec.vadBufLen;
+            logLen += snprintf(WriteLog + logLen, MAX_LINE - logLen, "VADLen=%us ", recBufLen / PCM_ONESEC_SMPS);
+            if(recBufLen < POSITIVE_PCM_LEN)
+            {
+                logLen += sprintf(WriteLog+logLen, "too short ");
+                break;
+            }
+        }
+        const SpkInfo *spk;
+        float score;
+        LOG_TRACE(g_logger, "SPKREG before spkex_score, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
+        spkex_score(recBuf, recBufLen, spk, score);
+        if(spk == NULL) break;
+        const SpkInfoChd *rspk = dynamic_cast<const SpkInfoChd*>(spk);
+        CDLLResult &res = rec.result;
+        res.m_iAlarmType = rspk->servType;
+        res.m_iTargetID = rspk->spkId;
+        res.m_iHarmLevel = rspk->harmLevel;
+        res.m_fLikely = getScoreFunc(NULL)(score);
+        res.m_fSegLikely[0] = res.m_fLikely;
+        reportIoacasResult(rec.result, WriteLog, logLen);
+
+        break;
+    }
+    LOG_INFO(g_logger, WriteLog<< "eop.");
+    LOG_clockoutput(LOGFMTI);
 }
 
 struct WavBuf{
@@ -598,14 +727,9 @@ void* IoaRegThread(void *param)
 	LOG_INFO(g_logger, "RegThread "<< This_Buf.threadIdx<< " of stream 0 has started ...");
 
     int hTLI;
-    MscCutHandle hMCut = NULL;
     int hVAD = -1;
     if(g_bUseLid){
         hTLI = openTLI_dup();
-    }
-    if(g_bUseMusicDetect || g_bSpkUseMCut){
-        hMCut = openMusicCut(szMusicDetectCfg);
-        assert(hMCut != NULL);
     }
     if(g_bUseVAD){
         hVAD = openOneVAD(szLIDVADCfg);
@@ -628,21 +752,22 @@ void* IoaRegThread(void *param)
             //这两个值为0，代表没有结果.
             This_Buf.result.m_iTargetID = 0;
             This_Buf.result.m_iAlarmType = 0;
+            This_Buf.curTime = cur_time;
 			//for TLI
 			if(g_bUseLid)
 			{
-                lidRegProcess(This_Buf, NULL, -1, hTLI);
+                lidRegProcess(This_Buf, hTLI);
 			}
 
-            if(hMCut != NULL){
-                musicProcess(This_Buf, hMCut);
+            if(g_bUseMusicDetect){
+                musicProcess(This_Buf);
             }
             if(hVAD != -1){
                 vadProcess(This_Buf, hVAD);
             }
 
             if(g_bUseSpk){
-                
+                spkRegProcess(This_Buf);   
             }
 
             //保存节目号，用于后面的去重.
@@ -674,9 +799,6 @@ void* IoaRegThread(void *param)
 	}
 
     if(g_bUseLid) closeTLI_dup(hTLI);
-    if(g_bUseMusicDetect || g_bSpkUseMCut){
-        closeMusicCut(hMCut);
-    }
     free(param);
     return NULL;
 }

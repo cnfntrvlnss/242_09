@@ -36,6 +36,7 @@ using namespace std;
 #include "../include/interface242.h"
 #include "libBAI.h"
 #include "socket_ex.h"
+#include "commonFunc.h"
 
 #include "protosrc/2.6/FixedAudioModel.pb.h"
 using namespace FixedAudioModel;
@@ -125,20 +126,6 @@ bool BampMatchObject::loadModel(const char *libFile)
     return true;
 }
 
-static string savebinaryData(unsigned long pid, char* data, unsigned len)
-{
-    char filePath[MAX_PATH];
-    struct timeval curtime;
-    gettimeofday(&curtime, NULL);
-    gen_spk_save_file(filePath, "ioacas", "debug", curtime.tv_sec, pid, NULL, NULL, NULL);
-    char *stSufPtr = strrchr(filePath, '.');
-    char tmpMrk[20];
-    snprintf(tmpMrk, 20, "_%lu", curtime.tv_usec);
-    insertStrAt0(stSufPtr, tmpMrk);
-    saveWave(data, len, filePath);
-    return filePath;
-}
-
 bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime)
 {
     AutoLock mylock(this->lock);
@@ -162,7 +149,7 @@ bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, u
     item.pcDataBuffer = pdata;
     item.iBufferSize = lensz;
     item.iDataType = 0;
-    BLOGT("saved audio segment before bamp match call, file: %s.", savebinaryData(pid, item.pcDataBuffer, item.iBufferSize).c_str());
+    BLOGT("saved audio segment before bamp match call, file: %s.", saveTempBinaryData(curtime, pid, item.pcDataBuffer, item.iBufferSize).c_str());
     BAI_Code err = BAI_Retrieval_Partly_VAD(&item, 1, pRes, &(this->hdl));
     if(err != BAI_OK){
         BLOGE("%sfail to call BAI_Retrieval_Partly, err: %d.", oss.str().c_str(), err);
