@@ -14,53 +14,55 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <set>
 #include <ostream>
 
 namespace zen4audio{
 
-typedef char DataUnit;
-DataUnit* myAlloc();
-void myFree(DataUnit* data);
+/*{
+    typedef char DataUnit;
+    DataUnit* myAlloc();
+    void myFree(DataUnit* data);
 
-//包装一个DataUnit数组，用于DataUnit数组的共享.
-struct DataBlock{
-    DataBlock():
-        m_buf(NULL), m_len(0), m_cnt(NULL)
-    { }
+    //包装一个DataUnit数组，用于DataUnit数组的共享.
+    struct DataBlock{
+        DataBlock():
+            m_buf(NULL), m_len(0), m_cnt(NULL)
+        { }
 
-    DataBlock(const DataBlock& other){
-        setData(other);
-    }
-    DataBlock& operator=(const DataBlock& other){
-        if(this == &other) return *this;
-        relse();
-        setData(other);
-        return *this;
-    }
-    ~DataBlock(){
-        relse();
-    }
-    bool initData(){
-        bool bRet = false;
-        DataUnit* blk = myAlloc();
-        if(blk != NULL){
-            m_buf = blk;
-            m_cnt = new short;
-            *m_cnt= 1;
-            bRet = true;
+        DataBlock(const DataBlock& other){
+            setData(other);
         }
-        return bRet;
-    }
-    void setData(const DataBlock& other);
-    void relse();
+        DataBlock& operator=(const DataBlock& other){
+            if(this == &other) return *this;
+            relse();
+            setData(other);
+            return *this;
+        }
+        ~DataBlock(){
+            relse();
+        }
+        bool initData(){
+            bool bRet = false;
+            DataUnit* blk = myAlloc();
+            if(blk != NULL){
+                m_buf = blk;
+                m_cnt = new short;
+                *m_cnt= 1;
+                bRet = true;
+            }
+            return bRet;
+        }
+        void setData(const DataBlock& other);
+        void relse();
 
-    char *m_buf;
-    unsigned m_len;
-    short *m_cnt;
-};
+        char *m_buf;
+        unsigned m_len;
+        short *m_cnt;
+    };
+}*/
 
 extern struct timeval ZERO_TIMEVAL;
-//extern std::vector<DataUnit*> g_vecFreeBlocks; 
 /**
  *  用于节目缓存的类, 比之前的实现相比，最小化了功能；用到了唯一的内存管理代码，用于缓存空间的计数与控制.
  *
@@ -79,10 +81,30 @@ public:
         assert(relse());
     }
     void setPid(unsigned long, time_t curTime =0);
-    time_t getPrjTime(){
+    struct timeval getPrjTime(){
         AutoLock lock(m_BufferLock);
-        return arrArrivalRecords[0].seconds;
+        struct timeval ret;
+        ret.tv_sec = arrArrivalRecords[0].seconds;
+        ret.tv_usec = 0;
+        return ret;
     }
+
+    /*
+    void getBampEndPos(unsigned &idx, unsigned &st){
+        AutoLock lock(m_BufferLock);
+        idx = this->bampEndIdx;
+        st = this->bampEndOffset;
+    }*/
+    void setBampEndPos(unsigned preIdx, unsigned preSt, unsigned idx, unsigned st, bool bHit){
+        AutoLock lock(m_BufferLock);
+        assert(this->bampEndIdx == preIdx);
+        assert(this->bampEndOffset == preSt);
+        this->bampEndIdx = idx;
+        this->bampEndOffset = st;
+        if(bHit) this->bBampHit = true;
+    }
+    void getUnBampData(unsigned &idx, unsigned &st, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data);
+    /*
     unsigned getBampEndPos(){
         AutoLock lock(m_BufferLock);
         return this->uBampEnd;   
@@ -93,6 +115,7 @@ public:
         uBampEnd += len;
         if(bHit) this->bBampHit = true;
     }
+    */
     bool getBampHit(){
         AutoLock lock(m_BufferLock);
         return this->bBampHit;
@@ -113,6 +136,7 @@ public:
         AutoLock lock(m_BufferLock);
         mainRegEdTime = curtime;
     }
+    
     bool relse();
     void getData(std::vector<DataBlock>& vec);
     unsigned getDataLength();
@@ -121,6 +145,17 @@ public:
         AutoLock lock(m_BufferLock);
         return bFull;
     }
+    /*
+    bool isNeedBamp(){
+        //std::vector<DataBlock>::iterator it = arrUnits.begin();
+        //unsigned total = 0;
+        //while(++it != arrUnits.end()){
+        //    total += it->m_len;
+        //}
+        if(bFull && ) return false;
+        else return true;
+    }
+    */
     unsigned recvData(char *data, unsigned len, time_t curTime = 0);
     void finishRecv();
     void init(){
@@ -132,6 +167,7 @@ private:
     ProjectBuffer& operator=(const ProjectBuffer&);
     void turnFull()
     {
+        assert(!bFull);
         bFull = true;
         fullUnitIdx = arrArrivalRecords.back().unitIdx;
         fullOffset = arrArrivalRecords.back().offset;
@@ -169,7 +205,10 @@ private:
     bool bAlloc;
     bool bFull;
     bool bBampHit;
-    unsigned uBampEnd;
+    bool bRelsed;
+    //unsigned uBampEnd;
+    unsigned bampEndIdx;
+    unsigned bampEndOffset;
     unsigned fullUnitIdx;
     unsigned fullOffset;
     struct timeval mainRegStTime;
@@ -200,12 +239,12 @@ void rlse_bufferglobal();
 extern "C" void notifyProjFinish(unsigned long pid);
 int recvProjSegment(ProjectSegment param, bool iswait = false);
 ProjectBuffer* obtainBuffer(unsigned long pid);
+void obtainAllBuffers(std::map<unsigned long, ProjectBuffer*>& allBufs);
 ProjectBuffer* obtainFullBufferTimeout(unsigned secs = -1);
 void returnBuffer(ProjectBuffer* obtained);
 extern "C" bool isAllFinished();
 
 }
-
 
 #endif
 

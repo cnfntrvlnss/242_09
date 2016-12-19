@@ -202,6 +202,21 @@ bool copyFile_S(const char* src, const char* des)
     }
     return true;
 }
+bool moveFile(const char* src, const char *des)
+{
+    string tmpdes = (string)des + ".tmp";
+    if(!copyFile(src, tmpdes.c_str())){
+        return false;
+    } 
+    if(remove(src) != 0){
+        return false;
+    }
+    if(rename(tmpdes.c_str(), des) != 0){
+        return false;
+    }
+    return true;
+
+}
 
 union MyConfigItemValue{
 	bool *bvar;
@@ -468,6 +483,7 @@ void ConfigRoom::accessValue(const char* group, const char* key, FuncUseConfig f
 
 //#define TEST_MAIN
 #ifdef TEST_MAIN
+#include <list>
 template<typename T>
 void print_config(const char* group, const char *key, const T &val)
 {
@@ -478,9 +494,9 @@ void print_config(const char* group, const char *key, const char *value)
 {
     printf("new config entry: %s.%s = %s.\n", group, key, value);
 }
-int main(int argc, char** args)
+void testConfigRoom(const char *cfgFile)
 {
-    ConfigRoom cfg(args[1]); 
+    ConfigRoom cfg(cfgFile); 
     while(true){
         //cfg.isUpdated("", "");
         cfg.checkAndLoad();
@@ -500,6 +516,37 @@ int main(int argc, char** args)
         }
         sleep(3);
     }
+}
+
+void testDataBlock()
+{
+    sleep(5);
+    vector<DataBlock> vec;
+    for(unsigned idx=0; idx < 1024; idx++){
+        DataBlock blk(1024 * 1024);
+        //for(unsigned jdx=0; jdx < blk.getCap(); jdx++){
+        //    memset(&blk.getPtr()[blk.len++], 256, 1);
+        //}
+        blk.len = 1024;
+        vec.push_back(blk);
+    }
+    list<DataBlock> li(vec.begin(), vec.end());
+    sleep(3);
+    li.clear();
+    vector<DataBlock>::iterator it= vec.end();
+    do{
+        it--;
+        assert(it->len == 1024);
+        vec.erase(it);
+    }while(vec.end() == vec.begin());
+    sleep(3);
+}
+
+int main(int argc, char** argv)
+{
+    //testConfigRoom(argv[1])
+    testDataBlock();
+    sleep(3);
     return 0;
 }
 

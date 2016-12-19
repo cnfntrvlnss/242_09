@@ -16,6 +16,8 @@
 # ifndef _COMMONFUNC_H
 # define _COMMONFUNC_H
 
+#include <cstdarg>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <ctype.h>
@@ -52,10 +54,21 @@ extern LoggerId g_logger;
 extern ConfigRoom g_AutoCfg;
 
 #define MAX_PATH 512
+extern char g_szDebugBinaryDir[MAX_PATH];
 
 #define PCM_ONESEC_LEN 16000
 #define PCM_ONESEC_SMPS 8000
 #define POSITIVE_PCM_LEN (PCM_ONESEC_LEN * 10)
+
+#define CHECK_PERFOMANCE
+#ifdef CHECK_PERFOMANCE
+
+void clockoutput_start(const char *fmt, ...);
+std::string clockoutput_end();
+#else
+static void clockoutput_start(const char *fmt, ...){}
+static std::string clockoutput_end(){return ""}
+#endif 
 
 bool if_directory_exists(const char *dir, bool bForce = false);
 int save_binary_data(const char *filePath, const void* ptr, size_t num, ...);
@@ -64,4 +77,5 @@ bool  gen_spk_save_file(char *savedname, const char *topDir, const char *subDir,
 bool saveWave(char *pData, unsigned len, const char *saveFileName);
 
 std::string saveTempBinaryData(struct timeval curtime, unsigned long pid, char* data, unsigned len);
+std::string saveProjectSegment(struct timeval curtime, unsigned long pid, unsigned *offset, char* data, unsigned len);
 # endif  

@@ -12,6 +12,7 @@
 #include "ProjectBuffer.h"
 #include "ioareg.h"
 
+#include <set>
 
 //TODO 这两个标记变量需要加锁.
 static bool g_bInitialized = false;
@@ -42,10 +43,11 @@ unsigned dft_getTypeFromId(unsigned int id)
 std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
 static std::map<std::pair<unsigned int, unsigned int>, int> g_mLangReportFilter;
 
+bool g_bUseBamp = true;
 const char szIoacasDir[]="./ioacas/";
+char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";
 ConfigRoom g_AutoCfg(((string)szIoacasDir + "SysFunc.cfg").c_str());
 
-static char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";// save hited project.
 static bool g_bDiscardable=true;// when feeding data.
 bool g_bSaveAfterRec=false; // when after processing, for project ID.
 
@@ -56,7 +58,6 @@ std::map<unsigned long,ProjRecord_t> NewReportedID;
 pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
 
 //////////////////---bamp---
-static bool g_bUseBamp = false;
 static unsigned g_uBampFixedLen = 3.0 * PCM_ONESEC_LEN;
 
 
@@ -139,9 +140,13 @@ static std::string formReportFilterStr(const std::map<int, int> &filter)
 
 static void initGlobal(BufferConfig &myBufCfg)
 {
+    g_strIp = GetLocalIP();
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
     Config_getValue(&g_AutoCfg, "", "ifUseBAMP", g_bUseBamp);
+    Config_getValue(&g_AutoCfg, "", "baiThreadNum", g_uBampThreadNum);
+    Config_getValue(&g_AutoCfg, "", "serverBampIp", g_szBampIp);
+    Config_getValue(&g_AutoCfg, "", "serverBampPort", g_uBampPort);
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
@@ -149,7 +154,7 @@ static void initGlobal(BufferConfig &myBufCfg)
     Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlockSize", myBufCfg.m_uBlockSize);
     Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMin", myBufCfg.m_uBlocksMin);
     Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMax", myBufCfg.m_uBlocksMax);
-
+    if(g_szBampIp[0] == '\0') strncpy(g_szBampIp, g_strIp.c_str(), 50);
     myBufCfg.waitLength *= 16000;
 	
 	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
@@ -167,6 +172,9 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(g_AutoCfg.configFile)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bUseBamp)
+            LOG4Z_VAR(g_uBampThreadNum)
+            LOG4Z_VAR(g_szBampIp)
+            LOG4Z_VAR(g_uBampPort)
             LOG4Z_VAR(g_bDiscardable)
             LOG4Z_VAR(g_bSaveAfterRec)
             LOG4Z_VAR(g_AutoCfg.configFile)
@@ -175,98 +183,10 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(myBufCfg.waitLength )
             );
 }
-/*
-static void initGlobal(BufferConfig &myBufCfg)
-{
-    g_strIp = GetLocalIP();
-	char szSysCfgFile[MAX_PATH]="";
-	int len =strlen(szEngineDir);
-	char szLangReports[256] = "11->1";
-    char szLangReportFilter[256] = "";
-	strcpy(szSysCfgFile, szEngineDir);
-	strcpy(szSysCfgFile+len, "SysFunc.cfg");
-    int bampsecs = 0;
-	parse_params_from_file(szSysCfgFile,
-			"BifSkipSameProject", &g_bSaveAfterRec,
-			"SsavePCMTopDir", m_TSI_SaveTopDir,
-            "SsaveAllTopDir", g_szAllPrjsDir,
-            "BifUseBAMP", &g_bUseBamp,
-            "FreportBampThreshold", &g_fReportBampThrd,
-            "IBampFixedSeconds", &bampsecs,
-            "SserverIp4BAMP", &g_szBampIp,
-            "IthreadNumPerStream", &g_ThreadNum, 
-            //for lid
-			"BifUseLID", &g_bUseLid,
-			"Blid.ifUseVAD", &g_bLidUseVAD,
-			"Blid.ifUseMusicDetect", &g_bLidUseMusicDetect,
-            "IsavedMusicPrecent", &g_iMusicPrecent,
-			"SlanguageReports", szLangReports,
-            "SlangReportFilter", szLangReportFilter,
-            //for projectBuffer
-			"BifDiscardable", &g_bDiscardable,
-			"IwaitSecondsStep", &(myBufCfg.waitSecondsStep),
-			"IwaitSeconds", &(myBufCfg.waitSeconds),
-			"IwaitLength", &(myBufCfg.waitLength),
-            "IbufferBlockSize", &(myBufCfg.m_uBlockSize),
-            "IbufferBlocksMin", &(myBufCfg.m_uBlocksMin),
-            "IbufferBlocksMax", &(myBufCfg.m_uBlocksMax),
-			NULL
-			);
 
-    if(g_szBampIp[0] == '\0'){
-        strcpy(g_szBampIp, g_strIp.c_str());
-    }
-    if(bampsecs > 0){
-        g_uBampFixedLen  = bampsecs * PCM_ONESEC_LEN;
-    }
-
-    myBufCfg.waitLength *= PCM_ONESEC_LEN;
-	if (g_ThreadNum <= 0)  g_ThreadNum = 1;
-	
-	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
-	if(m_TSI_SaveTopDir[tmpLen - 1] != '/'){
-		m_TSI_SaveTopDir[tmpLen] = '/';
-		m_TSI_SaveTopDir[tmpLen + 1] = '\0';
-	}
-    tmpLen = strlen(g_szAllPrjsDir);
-	if(tmpLen > 0 && g_szAllPrjsDir[tmpLen - 1] != '/'){
-		g_szAllPrjsDir[tmpLen] = '/';
-		g_szAllPrjsDir[tmpLen + 1] = '\0';
-	}
-
-	g_mLangReports = parseLangReportsFromStr(szLangReports);
-    parseReportFilter(szLangReportFilter, g_mLangReportControl);
-	g_logger = g_Log4zManager->createLogger("ioacas");
-    char strVer[50];
-    int verLen = 50;
-    GetDLLVersion(strVer, verLen);
-    LOG_INFO(g_logger, "version --- "<< strVer);
-	LOG_INFO(g_logger, "szSysCfgFile="<<szSysCfgFile<<"\n"
-			<<"g_ThreadNum="<<            g_ThreadNum<< "\n"
-			<<"m_TSI_SaveTopDir="<<       m_TSI_SaveTopDir<<"\n"
-			<<"g_bDiscardable="<< g_bDiscardable <<"\n"
-			<<"g_bSaveAfterRec="<< g_bSaveAfterRec << "\n"
-            <<"g_bUseBamp="<< g_bUseBamp<< "\n"
-            <<"g_fReportBampThrd="<< g_fReportBampThrd<< "\n"
-            <<"g_uBampFixedLen="<< g_uBampFixedLen<< "\n"
-			<<"g_bLidUseVAD="<< g_bLidUseVAD <<"\n"
-			<<"g_bUseLid="<< g_bUseLid <<"\n"
-			<<"g_mLangReports="<< formLangReportsStr(g_mLangReports)<< "\n"
-			<<"g_bLidUseMusicDetect="<< g_bLidUseMusicDetect <<"\n"
-            <<"g_iMusicPrecent="<< g_iMusicPrecent<<"\n"
-			<<"szMusicDetectCfg="<< szMusicDetectCfg <<"\n"
-			<<"szLIDCfgDir="<< szLIDCfgDir <<"\n"
-			<<"myBufCfg.waitSecondsStep="<< myBufCfg.waitSecondsStep<< "\n"
-			<<"myBufCfg.waitTotalSeconds="<< myBufCfg.waitSeconds<< "\n"
-			<<"myBufCfg.waitLength=" << myBufCfg.waitLength <<"\n"
-            <<"reportFilter="<< formReportFilterStr(g_mLangReportControl).c_str() <<"\n"
-			<<"use "<< g_ThreadNum<<" threads for Recognizition " <<"\n"
-			);
-}
-*/
-
+static void * bampMatchThread(void *);
 static void *ioacas_maintain_procedure(void *);
-static void reportBampResultSeg(struct timeval curtime, CDLLResult *pResult, ostream& oss);
+static void reportBampResultSeg(struct timeval curtime, CDLLResult *pResult, const vector<DataBlock>& vecData, ostream& oss);
 
 int InitDLL(int iPriority,
         int iThreadNum,
@@ -280,7 +200,6 @@ int InitDLL(int iPriority,
         LOGE("ioacas module is already initialized.");
         return 0;
     }
-    g_strIp = GetLocalIP();
     g_iModuleID = iModuleID;
     g_ReportResultAddr = func;
     
@@ -298,6 +217,19 @@ int InitDLL(int iPriority,
     if(!ioareg_init()){
         return 1;
     }
+    {
+		pthread_attr_t threadAttr;
+		pthread_attr_init(&threadAttr);
+        pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
+        pthread_t bmThdId;
+        int retc = pthread_create(&bmThdId, &threadAttr, bampMatchThread, NULL);
+        if(retc != 0){
+            LOG_ERROR(g_logger, "fail to create BampMatch thread!");
+            exit(1);
+        }
+		pthread_attr_destroy(&threadAttr);
+    }
+    if(g_bUseBamp)
     {
 		pthread_attr_t threadAttr;
 		pthread_attr_init(&threadAttr);
@@ -324,95 +256,126 @@ int SendData2DLL(WavDataUnit *p)
         LOG_WARN(g_logger, szHead<<"fail to receive data as ioacas being uninitialized.");
         return -1;
     }
+    clockoutput_start("SendData2DLL");
     ProjectSegment prj;
     prj.pid = p->m_iPCBID;
     prj.data = p->m_pData;
     prj.len = p->m_iDataLen;
     bool recvRet = recvProjSegment(prj, !g_bDiscardable);
-    struct timeval tmval;
-    gettimeofday(&tmval, NULL);
-    if(recvRet && g_bUseBamp){
-	    LOG_TRACE(g_logger, szHead<< "arrived in GlobalBuffer and start bamp match.");
-        char *recBuf1 = NULL;
-        unsigned recLen1 = 0;
-        char *recBuf2 = NULL;
-        unsigned recLen2 = 0;
-        std::vector<DataBlock> storedData;
-        ProjectBuffer* ptrBuf = obtainBuffer(prj.pid);
-        unsigned dataOffset = 0;
-        if(ptrBuf) dataOffset = ptrBuf->getBampEndPos();
-        if(prj.len >= g_uBampFixedLen){
-            // use the data of length p->m_iDataLen.
-            recBuf1 = prj.data;
-            recLen1 = prj.len;
-        }
-        else if(ptrBuf){
-            ptrBuf->getData(storedData);
-            assert(storedData.size() > 0);
-            unsigned totalLen = 0;
-            unsigned idx = 0;
-            for(; idx < storedData.size(); idx ++){
-                DataBlock &curb = storedData[idx];
-                totalLen += curb.m_len;
-                if(totalLen > dataOffset){
-                    recBuf1 = curb.m_buf + curb.m_len - totalLen + dataOffset;
-                    recLen1 = totalLen - dataOffset;
-                    break;
-                }
-            }
-            assert(idx != storedData.size());
-            if(idx != storedData.size() -1){
-                assert(idx == storedData.size() - 2);
-                idx ++;
-                recBuf2 = storedData[idx].m_buf;
-                recLen2 = storedData[idx].m_len;
-            }
-            if(recLen1 + recLen2 < g_uBampFixedLen){
-                recBuf1 = NULL;
-                recLen1 = 0;
-                recBuf2 = NULL;
-                recLen2 = 0;
-            }
-            else if(recLen1 >= g_uBampFixedLen){
-                recLen1 = g_uBampFixedLen;
-                recBuf2 = NULL;
-                recLen2 = 0;
-            }
-            else if(recLen1 + recLen2 > g_uBampFixedLen){
-                recLen2 = g_uBampFixedLen - recLen1;
-            }
-        }
-        if(recBuf1 != NULL){
-            char *recBuf = NULL;
-            unsigned recLen = 0;
-            if(recBuf2){
-                //TODO using constant memory.
-                recLen = recLen1 + recLen2;
-                recBuf = (char*)malloc(recLen);
-                memcpy(recBuf, recBuf1, recLen1);
-                memcpy(recBuf + recLen1, recBuf2, recLen1);
-                recBuf1 = recBuf;
-                recLen1 = recLen;
-            }
-            if(recBuf1){
-		bool bBampHit = false;
-                if(bamp_match(prj.pid, recBuf1, recLen1, dataOffset, tmval))
-                {
-                    bBampHit = true;
-                }
-                if(ptrBuf) ptrBuf->setBampResult(dataOffset, recLen1, bBampHit);
-            }
-            if(recBuf){
-                free(recBuf);
-            }
-        }
-        struct timeval tmval0 = tmval;
-        gettimeofday(&tmval, NULL);
-        if(ptrBuf != NULL) returnBuffer(ptrBuf);
-        LOGFMT_TRACE(g_logger, "%s ElapseInBamp %ld %ld    %ld %ld", szHead, tmval0.tv_sec, tmval0.tv_usec, tmval.tv_sec, tmval.tv_usec);
-    }
+    string output = clockoutput_end();
+    LOGFMTT(output.c_str());
 
     return 0;
+}
+
+/*
+static char* getCopyUnBamp(ProjectBuffer *prj, unsigned &offset, unsigned &outlen)
+{
+    offset = prj->getBampEndPos();
+    std::vector<DataBlock> storedData;
+    prj->getData(storedData);
+    unsigned totalLen = 0;
+    unsigned idx = 0;
+    char *buf1 = NULL;
+    unsigned len1 = 0;
+    for(; idx < storedData.size(); idx++){
+        DataBlock &curb = storedData[idx];
+        totalLen += curb.len;
+        if(totalLen > offset){
+            buf1 = curb.getPtr() + curb.len - totalLen + offset;
+            len1 = totalLen - offset;
+            break;
+        }
+    }
+    if(idx == storedData.size()){
+        assert(totalLen == offset);
+        return NULL;
+    }
+    for(unsigned i = idx+1; i < storedData.size(); i++){
+        totalLen += storedData[i].len;
+    }
+    outlen = totalLen - offset;
+    if(outlen < g_uBampFixedLen) return NULL;
+    char *ret = new char[outlen];
+    assert(ret != NULL);
+    unsigned curlen = 0;
+    memcpy(ret, buf1, len1);
+    curlen += len1;
+    for(unsigned i = idx+1; i < storedData.size(); i++){
+        memcpy(ret + curlen, storedData[i].getPtr(), storedData[i].len);
+        curlen += storedData[i].len;
+    }
+    assert(curlen == outlen);
+    return ret;
+}
+*/
+
+/***
+ * keep doing bampMatch until projectBuffer is full.
+ *
+ */
+void * bampMatchThread(void *)
+{
+    map<unsigned long, ProjectBuffer*> allProjs;   
+    BampMatchObject *obj = openBampHandle();
+    if(obj == NULL){
+        LOGFMT_ERROR(g_logger, "Error opening one session, exit!!!");
+        exit(1);
+    }
+    LOGFMT_INFO(g_logger, "<%lx> start bampMatchThread...", pthread_self());
+    while(true){
+        sleep(1);
+        clockoutput_start("one circle of bampMatch");
+        obtainAllBuffers(allProjs);
+        LOGFMT_TRACE(g_logger, "in BampMatchThread, project num: %u", allProjs.size());
+        vector<BampMatchParam> allBufs;
+        allBufs.clear();
+        while(true){
+            if(allProjs.size() == 0) break;
+            //struct timeval curtime;
+            //gettimeofday(&curtime, NULL);
+            for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end(); it++){
+                BampMatchParam tmpPar(it->second->ID);
+                it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data);
+                if(tmpPar.data.size() == 0) continue;
+                unsigned tolLen = 0;
+                for(unsigned idx=0; idx < tmpPar.data.size(); idx++){
+                    tolLen += tmpPar.data[idx].len;
+                }
+                if(tolLen < g_uBampFixedLen) continue;
+                tmpPar.preLen = tmpPar.data[0].getCap() * (tmpPar.preIdx - 1) + tmpPar.preOffset;
+                tmpPar.tolLen = 0;
+                for(size_t jdx=0; jdx < tmpPar.data.size(); jdx++){
+                    tmpPar.tolLen += tmpPar.data[jdx].len;
+                }
+                allBufs.push_back(tmpPar);
+            }
+            if(allBufs.size() == 0) break;
+            LOGFMT_DEBUG(g_logger, "in BampMatchThread, job num: %u", allBufs.size());
+            obj->bamp_match(allBufs);
+            for(size_t idx=0; idx < allBufs.size(); idx++){
+                bool bhit = false;
+                BampMatchParam &par = allBufs[idx];
+                if(par.targetID != 0){
+                    bhit = true;
+                }
+                allProjs[par.pid]->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, bhit);
+            }
+            break;
+        }
+
+        for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end();){
+            map<unsigned long, ProjectBuffer*>::iterator preit = it++;
+            ProjectBuffer* ptrbuf = preit->second;
+            if(preit->second->getFull()){
+                returnBuffer(preit->second);
+                allProjs.erase(preit);
+            }
+        }
+        string output = clockoutput_end();
+        LOGFMTT(output.c_str());
+    }
+    return NULL;
 }
 
 int CloseDLL()
@@ -470,9 +433,30 @@ int GetDataNum4Process(int iType[], int num[])
     return 0;
 }
 
-void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, ostream &oss)
+extern unsigned char linear2alaw(short pcm_val);
+bool saveWaveAsAlaw(const vector<DataBlock>& vecData, const char* filePath)
 {
-    oss<< " InProjectStart="<< pResult->m_fSegPosInPCB[0]<< " MatchedDuration="<< pResult->m_fTargetMatchLen<< " CfgID="<< pResult->m_iTargetID <<" InCfgStart="<< pResult->m_fSegPosInTarget[0]<< " MatchRate="<< pResult->m_fSegLikely[0];
+    FILE *fp = fopen(filePath, "wb");
+    if(fp == NULL) return false;
+    char zero = '\0';
+    for(size_t idx=0; idx < 256; idx++){
+        fwrite(&zero, 1, 1, fp);
+    }
+    for(size_t idx=0; idx < vecData.size(); idx++){
+        short *tmpPtr = reinterpret_cast<short*>(vecData[idx].getPtr() + vecData[idx].offset);
+        assert(vecData[idx].len % 2 == 0);
+        unsigned tmpLen = vecData[idx].len / 2;
+        for(size_t jdx=0; jdx < tmpLen; jdx ++){
+            char tmpCh = linear2alaw(tmpPtr[jdx]);
+            fwrite(&tmpCh, 1, 1, fp);
+        }
+    }
+    return true;
+}
+//TODO save alaw wave.
+void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, const vector<DataBlock>& vecData, ostream &oss)
+{
+    oss<<  " CfgID="<< pResult->m_iTargetID <<" InProjectStart="<< pResult->m_fSegPosInPCB[0]<< " MatchedDuration="<< pResult->m_fTargetMatchLen<<" InCfgStart="<< pResult->m_fSegPosInTarget[0]<< " MatchRate="<< pResult->m_fSegLikely[0];
     char savedfile[MAX_PATH];
     savedfile[0] = '\0';
     unsigned short type = pResult->m_iAlarmType;
@@ -483,12 +467,14 @@ void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, ostr
 #if 1
     gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, curtime.tv_sec, prj.m_iPCBID, &type, &cfgId, &cfgScore);
     char * stSufPtr = strrchr(savedfile, '.');
+    strcpy(stSufPtr+1, "pcm");
     char projSt[20];
     snprintf(projSt, 20, "_%.2f", pResult->m_fSegPosInPCB[0]);
     insertStrAt0(stSufPtr, projSt);
     snprintf(pResult->m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);
     if(access(savedfile, F_OK) != 0){
-        if(!saveWave(prj.m_pData, prj.m_iDataLen, savedfile)){
+        if(!saveWaveAsAlaw(vecData, savedfile)){
+        //if(!saveWave(prj.m_pData, prj.m_iDataLen, savedfile)){
             LOGFMT_ERROR(g_logger, "reportBampResultSeg failed to write wave to file %s.", savedfile);
             return;
         }
@@ -557,10 +543,10 @@ void *ioacas_maintain_procedure(void *)
         if(cur_time > 3 + lasttime){
             lasttime = cur_time;
             if(g_AutoCfg.checkAndLoad()){
-                ioareg_updateConfig();
             }
         }
     }
+    ioareg_maintain_procedure(cur_time);
     
     return NULL;
 }

@@ -17,6 +17,8 @@ static bool g_bInitialized = false;
 static unsigned int g_iModuleID;
 
 static ReceiveResult g_ReportResultAddr;
+
+//////////////////---lid---
 const unsigned int g_uVADType = 0x97;
 const unsigned int g_uVADID = 0x01;
 const unsigned int g_uMusicType = 0x97;
@@ -284,61 +286,58 @@ int AddCfg(unsigned int id,
         int iType,
         int iHarmLevel)
 {
-    if(iType == g_uSpkServType){
-        //FILE* fp = fopen(strConfigFile, "rb");
-        //if(fp == NULL) {
-        //    LOGFMT_ERROR(g_logger, "AddCfg failed to open file: %s", strConfigFile);
-        //     return -30;   
-        //}
-        //fseek(fp, 0, SEEK_END);
-        //unsigned uLen = ftell(fp);
-        //fseek(fp, 0, SEEK_SET);
-        //char *pData = new char[uLen];
-        //if(pData == NULL){
-        //    LOGFMT_ERROR(g_logger, "AddCfg failed to allocate memory, size: %u", uLen);
-        //    fclose(fp);
-        //    return -40;
-        //}
-        //unsigned rlen = fread(pData, 1, uLen, fp);
-        //fclose(fp);
-        //return AddCfgByBuf(pData, uLen, id, iType, iHarmLevel);
+    if(iType == g_uSpkServType && g_bUseSpk){
+        FILE* fp = fopen(strConfigFile, "rb");
+        if(fp == NULL) {
+            LOGFMT_ERROR(g_logger, "AddCfg failed to open file: %s", strConfigFile);
+             return -30;   
+        }
+        fseek(fp, 0, SEEK_END);
+        unsigned uLen = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        char *pData = new char[uLen];
+        if(pData == NULL){
+            LOGFMT_ERROR(g_logger, "in AddCfg, failed to allocate memory, size: %u", uLen);
+            fclose(fp);
+            return -40;
+        }
+        unsigned rlen = fread(pData, 1, uLen, fp);
+        fclose(fp);
+        return AddCfgByBuf(pData, uLen, id, iType, iHarmLevel);
     }
     return 0;
 }
-//TODO: make sure none of parallel unit are in spk recognition.
+
 int AddCfgByBuf(const char *pData,
         int iDataBytes,
         unsigned int id,
         int iType,
         int iHarmLevel)
 {
-    if(iType == g_uSpkServType){
-        //SpkInfoChd* tmpSpk = new SpkInfoChd(id);
-        //const SpkInfo* oldSpk;
-        //tmpSpk->m_iHarmLevel = iHarmLevel;
-        //bool bret = addSpkRec(tmpSpk, const_cast<char*>(pData), static_cast<int>(iDataBytes), oldSpk);
-        //if(oldSpk){
-        //    g_vUselessSpks.push_back(const_cast<SpkInfo*>(oldSpk));  
-        //} 
-        //if(!bret){
-        //    LOGFMT_ERROR(g_logger, "AddCfgByBuf failed, id=%u dataBytes=%d", id, iDataBytes);
-        //    return 0;
-        //}
-        //return 1;
+    if(iType == g_uSpkServType && g_bUseSpk){
+        SpkInfoChd* tmpSpk = new SpkInfoChd(id, iType, iHarmLevel);
+        const SpkInfo* oldSpk;
+        bool bret = spkex_addSpk(tmpSpk, const_cast<char*>(pData), static_cast<int>(iDataBytes), oldSpk);
+        if(oldSpk){
+            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(oldSpk));
+        } 
+        return bret;
     }
     return 0;
 }
 
-#if 1
-static bool addCfgPerFile(const char* szDir, const char* filename)
+static bool addSpkPerFile(const char* szDir, const char* filename)
 {
-    if(!checkSpkName(filename)){
+    SpkInfoChd *spk = new SpkInfoChd();
+    if(!spk->fromStr(filename)){
+        delete spk;
         return false;
     }
     string filePath = concatePath(szDir, filename);
     FILE *fp = fopen(filePath.c_str(), "rb");
     if(fp == NULL){
-        LOGFMT_ERROR(g_logger, "in addCfgPerFile, failed to open file: %s", filePath.c_str());
+        LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed to open file: %s", filePath.c_str());
+        delete spk;
         return false;
     }
     char *mdlData = NULL;
@@ -350,21 +349,23 @@ static bool addCfgPerFile(const char* szDir, const char* filename)
     size_t retr = fread(mdlData, 1, mdlLen, fp);
     bool ret = false;
     if(retr == mdlLen){
-        ret = addSpkSample(filename, mdlData, mdlLen);
+        const SpkInfo* oldSpk;
+        spkex_addSpk(spk, mdlData, mdlLen, oldSpk);
+        if(oldSpk){
+            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(oldSpk));
+        }
     }
     else{
-        LOGFMT_ERROR(g_logger, "in addCfgPerFile, failed to read file: %s, real: %u; read: %u.", filePath.c_str(), mdlLen, retr);
+        LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed to read file: %s, real: %u; read: %u.", filePath.c_str(), mdlLen, retr);
     }
     delete mdlData;
     return ret;
 }
-#endif
-
 
 int AddCfgByDir(int iType, const char *strDir)
 {
-    if(iType == g_uSpkServType){
-        int iRet = procFilesInDir(strDir, addCfgPerFile);
+    if(iType == g_uSpkServType && g_bUseSpk){
+        int iRet = procFilesInDir(strDir, addSpkPerFile);
         LOGFMT_INFO(g_logger, "AddCfgByDir finishing load spks in dir: %s, SPKCount=%d.", strDir, iRet);
         return iRet;
     }
@@ -372,30 +373,29 @@ int AddCfgByDir(int iType, const char *strDir)
 }
 int RemoveAllCfg(int iType)
 {
-    if(iType == g_uSpkServType){
-        //vector<const SpkInfo*> allspks;
-        //getAllSpkRec(allspks);
-        //for(size_t idx=0; idx < allspks.size(); idx++){
-        //    SpkInfo *curspk = const_cast<SpkInfo*>(rmSpkRec(allspks[idx]));
-        //    if(curspk){
-        //        g_vUselessSpks.push_back(curspk);
-        //    } 
-        //}
-        //return 1;
+    if(iType == g_uSpkServType && g_bUseSpk){
+        vector<const SpkInfo*> allSpks;
+        spkex_getAllSpks(allSpks);
+        for(size_t idx=0; idx < allSpks.size(); idx++){
+            spkex_rmSpk(allSpks[idx]);
+            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(allSpks[idx]));
+        }
+        return 1;
     }
     return 0;
 }
 int RemoveCfgByID(unsigned int id, int iType, int iHarmLevel)
 {
-    if(iType == g_uSpkServType){
-        //SpkInfoChd *curspk = new SpkInfoChd(id);
-        //curspk->m_iHarmLevel = iHarmLevel;
-        //const SpkInfo* delspk = rmSpkRec(curspk);
-        //delete curspk;
-        //if(delspk){
-        //    g_vUselessSpks.push_back(const_cast<SpkInfo*>(delspk));
-        //}
-        //return 1;
+    if(iType == g_uSpkServType && g_bUseSpk){
+        vector<const SpkInfo*> allSpks;
+        spkex_getAllSpks(allSpks);
+        for(size_t idx=0; idx < allSpks.size(); idx++){
+            if(allSpks[idx]->spkId == id){
+                spkex_rmSpk(allSpks[idx]);
+                delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(allSpks[idx]));
+            }
+        }
+        return 1;
     }
     return 0;
 }
@@ -490,10 +490,9 @@ void *ioacas_maintain_procedure(void *)
         if(cur_time > 3 + lasttime){
             lasttime = cur_time;
             if(g_AutoCfg.checkAndLoad()){
-                ioareg_updateConfig();
             }
         }
     }
-    
+    ioareg_maintain_procedure(cur_time);
     return NULL;
 }

@@ -28,12 +28,16 @@ string GetLocalIP()
 {          
 	int MAXINTERFACES=16;    
     char retIP[50];
+    char condIP[50];
+    retIP[0] = '\0';
+    condIP[0] = '\0';
     //if(retIP[0] != '\0') return retIP;
 	const char *ip = "127.0.0.1";    
 	int fd, intrface;      
 	struct ifreq buf[MAXINTERFACES];      
 	struct ifconf ifc;      
-	int thrdNum = 0;
+	int firstNum = 0;
+    int thrdNum = 0;
 
 	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) >= 0)      
 	{      
@@ -42,7 +46,6 @@ string GetLocalIP()
 		if (!ioctl(fd, SIOCGIFCONF, (char *)&ifc))      
 		{      
 			intrface = ifc.ifc_len / sizeof(struct ifreq);      
-
 			while (intrface-- > 0)      
 			{      
 				if (!(ioctl (fd, SIOCGIFADDR, (char *) &buf[intrface])))      
@@ -50,19 +53,18 @@ string GetLocalIP()
 					ip=(inet_ntoa(((struct sockaddr_in*)(&buf[intrface].ifr_addr))->sin_addr));      
 					//fetch management ip. determined by wheath the third part is even.
 					if(strcmp(ip, "127.0.0.1") == 0) continue;
-					if(sscanf(ip, "%*d.%*d.%d.%*d", &thrdNum) != 1){
-						continue;
-					}
-                    if(thrdNum %2 == 0){
+					if(sscanf(ip, "%d.%*d.%d.%*d", &firstNum, &thrdNum) != 2){ continue; }
+                    strncpy(condIP, ip, 50);
+                    if(firstNum == 10 && thrdNum % 2 == 0){
                       strncpy(retIP, ip, 50);
-                      break;       
                     }
 				}                          
 			}    
 		}      
 		close (fd);
-	}  
-	return retIP; 
+	} 
+    if(retIP[0] != '\0') return retIP;
+    else return condIP;
 } 
 
 string addr2str(const struct sockaddr *addr)

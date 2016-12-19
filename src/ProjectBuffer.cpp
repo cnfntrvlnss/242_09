@@ -12,6 +12,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <list>
 #include<iostream>
 #include <sstream>
 #include <algorithm>
@@ -28,74 +29,123 @@ extern zsummer::log4z::ILog4zManager *g_Log4zManager;
 #define PCM_PERSEC_LEN 16000
 namespace zen4audio{
 
-unsigned BLOCKSIZE= 60 * 16000;
-vector<DataUnit*> g_vecFreeBlocks; 
-static set<DataUnit*> g_setUsedBlocks;
-static unsigned g_uBlocksMax = 600;
+static unsigned BLOCKSIZE= 60 * 16000;
 static unsigned g_uBlocksMin = 300;
-static LockHelper g_BlocksManaLocker;
-DataUnit* myAlloc(){
-    DataUnit* ret = NULL;
-    
-    AutoLock lock(g_BlocksManaLocker);
-    if(g_setUsedBlocks.size() < g_uBlocksMax){
-        if(g_vecFreeBlocks.empty()){
-            ret = new DataUnit[BLOCKSIZE];
-            assert(ret != NULL);
-        }
-        else{
-            ret = g_vecFreeBlocks.back();
-            g_vecFreeBlocks.pop_back();
-        }
-        g_setUsedBlocks.insert(ret);
+static unsigned g_uBlocksMax = 600;
+static list<DataBlock> g_liFreeBlocks;
+static set<DataBlock> g_liUsedBlocks;
+static LockHelper g_BlockManaLocker;
+static inline DataBlock BlockMana_alloc()
+{
+    AutoLock lock(g_BlockManaLocker);
+    list<DataBlock>::iterator it = g_liFreeBlocks.begin();
+    for(; it != g_liFreeBlocks.end(); it++){
+        if(it->getPeerNum() == 1) break;
     }
-
-    return ret;
-}
-
-void myFree(DataUnit* data){
-    if(data == NULL) return;
-    AutoLock lock(g_BlocksManaLocker);
-    if(g_setUsedBlocks.size() > g_uBlocksMin){
-        delete [] data;
+    if(it != g_liFreeBlocks.end()){
+        pair<set<DataBlock>::iterator, bool> reti = g_liUsedBlocks.insert(*it);
+        assert(reti.second);
+        g_liFreeBlocks.erase(it);
+        assert((*reti.first).offset == 0 && (*reti.first).len == 0);
+        return *reti.first;
     }
     else{
-        if(g_vecFreeBlocks.size() < g_uBlocksMin){
-            g_vecFreeBlocks.push_back(data);
+        size_t allcnt = g_liFreeBlocks.size() + g_liUsedBlocks.size();
+        if(allcnt > g_uBlocksMax) return DataBlock();
+        else {
+            pair<set<DataBlock>::iterator, bool> reti = g_liUsedBlocks.insert(DataBlock(BLOCKSIZE));
+            assert(reti.second);
+            assert((*reti.first).offset == 0 && (*reti.first).len == 0);
+            return *reti.first;
         }
-        else{
+    }
+}
+
+static inline void BlockMana_relse(const DataBlock& blk)
+{
+    AutoLock lock(g_BlockManaLocker);
+    assert(blk.len <= blk.getCap());
+    assert(g_liUsedBlocks.find(blk) != g_liUsedBlocks.end());
+    if(g_liFreeBlocks.size() + g_liUsedBlocks.size() <= g_uBlocksMin){
+        g_liFreeBlocks.push_back(blk);
+        g_liFreeBlocks.back().len = 0;
+        g_liFreeBlocks.back().offset = 0;
+        g_liUsedBlocks.erase(blk);
+    }
+    else{
+        g_liUsedBlocks.erase(blk);
+    }
+}
+
+/*
+{
+    vector<DataUnit*> g_vecFreeBlocks; 
+    static set<DataUnit*> g_setUsedBlocks;
+    static unsigned g_uBlocksMax = 600;
+    static unsigned g_uBlocksMin = 300;
+    static LockHelper g_BlocksManaLocker;
+    DataUnit* myAlloc(){
+        DataUnit* ret = NULL;
+        
+        AutoLock lock(g_BlocksManaLocker);
+        if(g_setUsedBlocks.size() < g_uBlocksMax){
+            if(g_vecFreeBlocks.empty()){
+                ret = new DataUnit[BLOCKSIZE];
+                assert(ret != NULL);
+            }
+            else{
+                ret = g_vecFreeBlocks.back();
+                g_vecFreeBlocks.pop_back();
+            }
+            g_setUsedBlocks.insert(ret);
+        }
+
+        return ret;
+    }
+
+    void myFree(DataUnit* data){
+        if(data == NULL) return;
+        AutoLock lock(g_BlocksManaLocker);
+        if(g_setUsedBlocks.size() > g_uBlocksMin){
             delete [] data;
         }
-    }
-    if(g_setUsedBlocks.erase(data) != 1){
-        //data allocated somewhere other than alloc above.   
-        assert(false);
-    }
-}
-
-static LockHelper g_DataBlockLocker;//for use in multi-threaded environment.
-void DataBlock::setData(const DataBlock& other)
-{
-    AutoLock myLock(g_DataBlockLocker);
-    m_buf = other.m_buf;
-    m_len = other.m_len;
-    m_cnt = other.m_cnt;
-    if(m_cnt != NULL){
-        (*m_cnt)++;
-    }
-}
-void DataBlock::relse()
-{
-    AutoLock myLock(g_DataBlockLocker);
-    if(m_buf != NULL){
-        (*m_cnt) --;
-        if(*m_cnt == 0){
-            myFree(static_cast<DataUnit*>(m_buf));
-            delete m_cnt;
+        else{
+            if(g_vecFreeBlocks.size() < g_uBlocksMin){
+                g_vecFreeBlocks.push_back(data);
+            }
+            else{
+                delete [] data;
+            }
+        }
+        if(g_setUsedBlocks.erase(data) != 1){
+            //data allocated somewhere other than alloc above.   
+            assert(false);
         }
     }
-}
 
+    static LockHelper g_DataBlockLocker;//for use in multi-threaded environment.
+    void DataBlock::setData(const DataBlock& other)
+    {
+        AutoLock myLock(g_DataBlockLocker);
+        m_buf = other.m_buf;
+        m_len = other.m_len;
+        m_cnt = other.m_cnt;
+        if(m_cnt != NULL){
+            (*m_cnt)++;
+        }
+    }
+    void DataBlock::relse()
+    {
+        AutoLock myLock(g_DataBlockLocker);
+        if(m_buf != NULL){
+            (*m_cnt) --;
+            if(*m_cnt == 0){
+                myFree(static_cast<DataUnit*>(m_buf));
+                delete m_cnt;
+            }
+        }
+    }
+}*/
 struct timeval ZERO_TIMEVAL;
 static LoggerId g_BufferLogger = LOG4Z_MAIN_LOGGER_ID;
 ProjectBuffer::BufferConfig ProjectBuffer::bufferConfig;
@@ -126,13 +176,16 @@ void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
     this->bFull = false;
     this->bAlloc = true;
     this->bBampHit = false;
-    this->uBampEnd = 0;
+    this->bRelsed = false;
+    //this->uBampEnd = 0;
+    this->bampEndIdx = 1;
+    this->bampEndOffset = 0;
     this->mainRegStTime.tv_sec = 0;
     this->mainRegStTime.tv_usec = 0;
     this->mainRegEdTime.tv_sec = 0;
     this->mainRegEdTime.tv_usec = 0;
     DataBlock ele;
-    ele.m_len = BLOCKSIZE;
+    ele.len = BLOCKSIZE;
     arrUnits.push_back(ele);
     arrArrivalRecords.push_back(ArrivalRecord(curTime, 0, 0));
 }
@@ -148,13 +201,43 @@ void ProjectBuffer::getData(vector<DataBlock>& vec)
     return;
 }
 
+void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data)
+{
+    AutoLock lock(m_BufferLock);
+    data.clear();
+    preidx = this->bampEndIdx;
+    prest = this->bampEndOffset;
+    unsigned idx = preidx;
+    unsigned st = prest;
+    endidx = arrUnits.size() - 1;
+    endst = arrUnits[endidx].len;
+    assert(endidx >= idx);
+    while(idx < endidx){
+        assert(st <= arrUnits[idx].len);
+        unsigned len = arrUnits[idx].len - st;
+        if(len > 0){
+             data.push_back(arrUnits[idx]);   
+            data.back().offset = st;
+            data.back().len = len;
+        }
+        idx ++;
+        st = arrUnits[idx].offset;
+    }
+    assert(st <= endst);
+    if(st < endst){
+        unsigned len = endst - st;
+        data.push_back(arrUnits[idx]);
+        data.back().offset = st;
+        data.back().len = len;
+    }
+}
 unsigned ProjectBuffer::getDataLength()
 {
     AutoLock lock(m_BufferLock);
     vector<DataBlock>::iterator it = arrUnits.begin();
     unsigned ret = 0;
     while(++it != arrUnits.end()){
-        ret += it->m_len;
+        ret += it->len;
     }
     return 0;
 }
@@ -170,6 +253,11 @@ bool ProjectBuffer::relse(){
     if(mainRegEdTime.tv_sec == 0){
         return false;
     }
+    if(bRelsed) return true;
+    for(size_t idx=1; idx < arrUnits.size(); idx++){
+        BlockMana_relse(arrUnits[idx]);
+    }
+    bRelsed = true;
 
     if (zsummer::log4z::ILog4zManager::getPtr()->prePushLog(g_BufferLogger, LOG_LEVEL_DEBUG)){
         ostringstream oss;
@@ -190,27 +278,27 @@ unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, time_t curTime)
     AutoLock lock(m_BufferLock);
     unsigned ret = 0;
     if(curTime == 0) curTime = time(NULL);
-    unsigned curSize = arrUnits.back().m_len;
+    unsigned curSize = arrUnits.back().len;
     unsigned size1 = dataLen > BLOCKSIZE - curSize ? BLOCKSIZE - curSize : dataLen;
     unsigned size2 = dataLen - size1;
-    memcpy(arrUnits.back().m_buf + curSize, data, size1);
+    memcpy(arrUnits.back().getPtr() + curSize, data, size1);
     ret += size1;
-    arrUnits.back().m_len += size1;
+    arrUnits.back().len += size1;
     if(size2 > 0){
-        DataBlock ele;
-        if(ele.initData()){
+        DataBlock ele = BlockMana_alloc();
+        if(ele.getPtr()){
             arrUnits.push_back(ele);
-            memcpy(arrUnits.back().m_buf, data + size1, size2);
+            memcpy(arrUnits.back().getPtr(), data + size1, size2);
             ret += size2;
-            arrUnits.back().m_len += size2;
+            arrUnits.back().len += size2;
         }
         else{
             LOGFMT_WARN(g_BufferLogger, "PID=%lu failed to store data, curBlockCount=%u, for no DataBlock available.", this->ID, (arrUnits.size() -1));
         }
     }
-    arrArrivalRecords.push_back(ArrivalRecord(curTime, arrUnits.size()-1, arrUnits.back().m_len));
+    arrArrivalRecords.push_back(ArrivalRecord(curTime, arrUnits.size()-1, arrUnits.back().len));
     if(ret > 0){
-        if(arrUnits.size() - 1 > ceilUnitIdx || (arrUnits.size() -1 == ceilUnitIdx && arrUnits.back().m_len >= ceilOffset)){
+        if(arrUnits.size() - 1 > ceilUnitIdx || (arrUnits.size() -1 == ceilUnitIdx && arrUnits.back().len >= ceilOffset)){
             LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as the accumulated data reaches to maximum.", this->ID);
             turnFull();
         }
@@ -222,6 +310,7 @@ unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, time_t curTime)
 void ProjectBuffer::finishRecv()
 {
     AutoLock lock(m_BufferLock);
+    LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as being notified.", this->ID);
     turnFull();
 }
 
@@ -240,12 +329,12 @@ bool ProjectBuffer::isFull(time_t curTime)
     unsigned long totalTime = curTime > stRec.seconds ? curTime - stRec.seconds : 0;
     if(diffTime > bufferConfig.waitSecondsStep){
         turnFull();
-        LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as no more data arrives.", this->ID);
+        LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, diffTime: %lu.", this->ID, diffTime);
         ret = true;
     }
     else if(totalTime > bufferConfig.waitSeconds){
         turnFull();
-        LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as the overall time of buffering reachs its maximum.", this->ID);
+        LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, totalTime: %lu.", this->ID, totalTime);
         ret = true;
     }
 
@@ -313,8 +402,10 @@ void notifyProjFinish(unsigned long pid)
     if(g_mapProjs.find(pid) != g_mapProjs.end()){
         ProjectBuffer *tmp = g_mapProjs[pid].prj;
         tmp->finishRecv();
-        g_setPrevFullIDs.erase(pid);
-        g_setFullIDs.insert(pid);
+        if(g_setPrevFullIDs.find(pid) != g_setPrevFullIDs.end()){
+            g_setPrevFullIDs.erase(pid);
+            g_setFullIDs.insert(pid);
+        }
     }
     assert(g_mapProjs.size() == g_setPrevFullIDs.size() + g_setFullIDs.size() + g_setPostFullIDs.size());
     g_ProjsLocker.unLock();
@@ -396,6 +487,18 @@ static void transferIDs(time_t curTime)
     }
 }
 
+void obtainAllBuffers(map<unsigned long, ProjectBuffer*>& allBufs)
+{
+    g_ProjsLocker.lock();
+    for(map<unsigned long, ProjectCheckbook>::iterator it = g_mapProjs.begin(); it != g_mapProjs.end(); it++){
+        if(allBufs.find(it->first) == allBufs.end()){
+            allBufs[it->first] = it->second.prj;
+            it->second.cnt++;
+        }
+    }
+    g_ProjsLocker.unLock();
+
+}
 ProjectBuffer* obtainBuffer(unsigned long pid)
 {
     g_ProjsLocker.lock();

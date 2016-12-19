@@ -19,7 +19,7 @@ CPPNAMES += spk_ex.cpp spk_fork.cpp
 CPPNAMES+= waveinfo.cpp Voc2Wav.cpp WaveFunc.cpp
 CNAMES:=
 PROGNAME=libIOACAS.so
-LDLIBS +=-L${TESTDIR} -lTLI_API -lSpeakerRecogAPI -ldllSRVADCluster -lNewVAD -lMusicDetect
+LDLIBS +=-L${TESTDIR} -lTLI_API -lNewVAD -lMusicDetect #-lSpeakerRecogAPI -ldllSRVADCluster
 LDFLAGS += -lpthread -shared
 CFLAGS +=
 ifneq (${CONF},Debug)

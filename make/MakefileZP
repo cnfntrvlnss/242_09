@@ -17,11 +17,11 @@ CPPNAMES:=interfacezp.cpp ioareg.cpp commonFunc.cpp log4z.cpp ProjectBuffer.cpp 
 CPPNAMES += dllVAD_dup.cpp MusicDetect_dup.cpp TLI_API_dup.cpp lid_fork.cpp
 CPPNAMES += spk_ex.cpp spk_fork.cpp
 CPPNAMES+= waveinfo.cpp Voc2Wav.cpp WaveFunc.cpp
-CPPNAMES += FixedAudioModel.pb.cc libBAI_ex.cpp libBAI_fork.cpp
+CPPNAMES += FixedAudioModel.pb.cc libBAI_ex.cpp# libBAI_fork.cpp
 PROGNAME=libIOACAS.so
-LDLIBS +=-L${TESTDIR} -lprotobuf# -lBAMP -lSpeakerRecogAPI -ldllSRVADCluster -lTLI_API -lNewVAD -lMusicDetect
+LDLIBS +=-L${TESTDIR} -lprotobuf -lBAMP# -lSpeakerRecogAPI -ldllSRVADCluster -lTLI_API -lNewVAD -lMusicDetect
 LDFLAGS += -lpthread -shared
-CFLAGS += -Wall -fPIC -pthread -isystem ../src/protosrc/2.6/
+CFLAGS += -Wall -fPIC -pthread -isystem ../src/protosrc/2.6/ -DLIDFORK
 ifneq (${CONF},Debug)
 CFLAGS+= -O2
 else

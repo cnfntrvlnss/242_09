@@ -46,12 +46,18 @@ typedef int (*FuncInitDll)(int iPriority,
         unsigned int iModuleID);
 typedef int (*FuncSendData2DLL)(WavDataUnit *p);
 typedef int (*FuncCloseDll)();
+typedef int (*FuncAddCfgByDir)(int iType, const char *strDir);
+typedef int (*FuncAddCfg)(int, const char*, const char*, int, int);
+typedef int (*FuncRemoveAllCfg)(int iType);
 typedef int (*FuncNotifyProjFinish)(unsigned long);
 typedef bool (*FuncIsAllFinished)();
 void *g_Handler4Ioacas;
 FuncInitDll funcInitDll;
 FuncSendData2DLL funcSendData2Dll;
 FuncCloseDll funcCloseDll;
+FuncAddCfgByDir funcAddCfgByDir;
+FuncAddCfg funcAddCfg;
+FuncRemoveAllCfg funcRemoveAllCfg;
 FuncNotifyProjFinish funcNotifyProjFinish;
 FuncIsAllFinished funcIsAllFinished;
 #define MAX_PATH 512
@@ -118,6 +124,7 @@ public:
 map<unsigned long long, ProjInfo> g_mId2Infos;
 pthread_mutex_t g_ProjIdsLock = PTHREAD_MUTEX_INITIALIZER;
 FILE *g_fpRes = NULL;
+float g_fWaitSecs = 0.1;
 
 int receive_result(unsigned int iModuleID, CDLLResult *res)
 {
@@ -297,6 +304,10 @@ void *sendProjectProcess(void *param)
                     }
                     pthread_mutex_unlock(&g_ProjIdsLock);
                 }
+                struct timeval tv;
+                tv.tv_sec = (int)g_fWaitSecs;
+                tv.tv_usec = (g_fWaitSecs - tv.tv_sec) * 1000000;
+                select(0, NULL, NULL, NULL, &tv);
 			}
 			if(ifs.fail() && !ifs.eof()){
 				//LOGFMTE("error: %s; file %s\n", strerror(errno), ptask->filePath);
@@ -452,6 +463,24 @@ void initIoacas()
         exit(1);
     }
 
+    funcAddCfgByDir = (FuncAddCfgByDir)dlsym(hdl, "AddCfgByDir");
+    errStr = dlerror();
+    if(errStr != NULL){
+        fprintf(stderr, "ERROR %s.\n", errStr);
+        exit(1);
+    }
+    funcAddCfg = (FuncAddCfg)dlsym(hdl, "AddCfg");
+    errStr = dlerror();
+    if(errStr != NULL){
+        fprintf(stderr, "ERROR %s.\n", errStr);
+        exit(1);
+    }
+    funcRemoveAllCfg = (FuncRemoveAllCfg)dlsym(hdl, "RemoveAllCfg");
+    errStr = dlerror();
+    if(errStr != NULL){
+        fprintf(stderr, "ERROR %s.\n", errStr);
+        exit(1);
+    }
     dlerror();
     funcNotifyProjFinish = (FuncNotifyProjFinish)dlsym(hdl, "notifyProjFinish");
     errStr = dlerror();
@@ -536,7 +565,10 @@ int main(int argc, char* argv[])
         fprintf(stderr, "failed in InitDll");
         exit(1);
     }
-
+    char mdlPath[MAX_PATH];
+    int servType4Model = 146;
+    strcpy(mdlPath, "SpkModel");
+    funcAddCfgByDir(servType4Model, mdlPath);
     do{
         interactWithMe();
         send_project_parallel(parallelNum);
@@ -545,14 +577,15 @@ int main(int argc, char* argv[])
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     while(true){
-        if(funcIsAllFinished()){
-            cout<< "checked all tasks finishing in BufferGlobal.\n";
-             break;   
-        }
+       // if(funcIsAllFinished()){
+       //     cout<< "checked all tasks finishing in BufferGlobal.\n";
+       //      break;   
+       // }
         tv.tv_sec = 5;
         select(0, NULL, NULL, NULL, &tv);
     }
 	cout<< ">>>>>>>>>>>>>finish test<<<<<<<<<<<<<<<\n";
+    funcRemoveAllCfg(servType4Model);
     funcCloseDll();
     relsIoacas();
 	return 0;

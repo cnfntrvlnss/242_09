@@ -187,12 +187,12 @@ bool saveWave(char *pData, unsigned len, const char *saveFileName)
     return ret;
 }
 
-string g_DebugBinaryDir = "ioacas/debug/";
+char g_szDebugBinaryDir[MAX_PATH] = "ioacas/debug/";
 string saveTempBinaryData(struct timeval curtime, unsigned long pid, char* data, unsigned len)
 {
     char filePath[MAX_PATH];
     if(curtime.tv_sec == 0) gettimeofday(&curtime, NULL);
-    gen_spk_save_file(filePath, g_DebugBinaryDir.c_str(), NULL, curtime.tv_sec, pid, NULL, NULL, NULL);
+    gen_spk_save_file(filePath, g_szDebugBinaryDir, NULL, curtime.tv_sec, pid, NULL, NULL, NULL);
     char *stSufPtr = strrchr(filePath, '.');
     char tmpMrk[20];
     snprintf(tmpMrk, 20, "_%lu", curtime.tv_usec);
@@ -200,4 +200,43 @@ string saveTempBinaryData(struct timeval curtime, unsigned long pid, char* data,
     saveWave(data, len, filePath);
     return filePath;
 }
+std::string saveProjectSegment(struct timeval curtime, unsigned long pid, unsigned *offset, char* data, unsigned len)
+{
+    char filePath[MAX_PATH];
+    if(curtime.tv_sec == 0) gettimeofday(&curtime, NULL);
+    gen_spk_save_file(filePath, g_szDebugBinaryDir, NULL, curtime.tv_sec, pid, NULL, NULL, NULL);
+    if(offset){
+        char tmpMrk[20];
+        char *stSufPtr = strrchr(filePath, '.');
+        snprintf(tmpMrk, 20, "_%.2f", ((float)*offset) / 16000);
+        insertStrAt0(stSufPtr, tmpMrk);
+    }
+    saveWave(data, len, filePath);
+    return filePath;
+}
 
+static std::map<pthread_t, std::vector<std::pair<unsigned, std::string> > > allClockStack;
+LockHelper clockoutput_lock;
+void clockoutput_start(const char *fmt, ...)
+{
+    clockoutput_lock.lock();
+    std::vector<std::pair<unsigned, std::string> > & cur = allClockStack[pthread_self()];
+    cur.push_back(std::make_pair(clock(), ""));
+    va_list args;
+    va_start(args, fmt);
+    cur[cur.size() -1].second.resize(100);
+    int retp = vsnprintf(const_cast<char*>(cur[cur.size() -1].second.c_str()), 100, fmt, args);
+    cur[cur.size() - 1].second.resize(retp);
+    clockoutput_lock.unLock();
+}
+
+std::string clockoutput_end()
+{
+    AutoLock myLock(clockoutput_lock);
+    std::vector<std::pair<unsigned, std::string> > & cur = allClockStack[pthread_self()];
+    unsigned lastclock = cur[cur.size() -1].first;
+    ostringstream oss;
+    oss<< cur[cur.size() - 1].second << " ElapseClock "<< clock() - lastclock;
+    cur.pop_back();
+    return oss.str();
+}

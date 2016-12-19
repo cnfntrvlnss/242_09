@@ -8,12 +8,13 @@
 #include "ioareg.h"
 
 #include<iostream>
+#include <map>
+#include <queue>
 using namespace std;
 
 #include "MusicDetect.h"
 #include "dllVAD_dup.h"
 #include "TLI_API_dup.h"
-#include "spk_ex.h"
 #include "dllSRVADCluster.h"
 
 struct RecogThreadSpace{
@@ -21,9 +22,12 @@ struct RecogThreadSpace{
         threadIdx = 0;
         result.m_iDataUnitNum = 1;
         result.m_pDataUnit[0] = &projData;
+        accntTotalCnt = 0;
+        accntTotalBytes = 0;
     }
     ~RecogThreadSpace(){
     }
+    pthread_t threadId;
     unsigned threadIdx;
     struct timeval curTime;
     //drain variable in the sequence of recognization.
@@ -33,13 +37,32 @@ struct RecogThreadSpace{
     unsigned vadBufLen;
     short *mcutBuf;
     unsigned mcutBufLen;
+    unsigned long accntTotalCnt;
+    unsigned long accntTotalBytes;
+    LockHelper lock;
+    void addAccnt(){
+        lock.lock();
+        accntTotalCnt ++;
+        accntTotalBytes += projData.m_iDataLen;
+        lock.unLock();
+    }
+    void getAccnt(unsigned long& prjcnt, unsigned long& bytecnt){
+        lock.lock();
+        prjcnt = accntTotalCnt;
+        bytecnt = accntTotalBytes;
+        lock.unLock();
+    }
+private:
+    RecogThreadSpace(const RecogThreadSpace&);
+    RecogThreadSpace& operator=(const RecogThreadSpace&);
 };
 
 char g_szAllPrjsDir[MAX_PATH]; //save all projects, when after processing.
 pthread_mutex_t g_AllProjsDirLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_key_t g_RecWavBufsKey;
-static pthread_t *g_pthread_id = NULL;
+//static pthread_t *g_pthread_id = NULL;
 static short g_ThreadNum = 1;
+static RecogThreadSpace *g_RecSpaceArr = NULL;
 
 //////////////////-----vad-----
 static bool g_bUseVAD=false;
@@ -59,10 +82,46 @@ void* IoaRegThread(void *param);
 ///////////////////---spk---
 static char szSpkVADCfg[MAX_PATH] = "./ioacas/VAD_SID.cfg";
 static char szSpkCfgFile[MAX_PATH] = "./ioacas/runSpk.cfg";
-static bool g_bUseSpk = true;
+bool g_bUseSpk = true;
 static bool g_bSpkUseVad = true;
 static bool g_bSpkUseMCut = true;
 extern float defaultSpkScoreThrd;
+static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
+
+static inline void checkAllPendingSpks()
+{
+    while(g_PendingDeleteSpks.size() > 0){
+        map<pthread_t, unsigned long>& spkSnap = g_PendingDeleteSpks.front().second;
+        size_t jdx = 0;
+        for(; jdx < g_ThreadNum; jdx++){
+            unsigned long cnt, cnt1; 
+            g_RecSpaceArr[jdx].getAccnt(cnt, cnt1);
+            assert(spkSnap.find(g_RecSpaceArr[jdx].threadId) != spkSnap.end());
+            if(spkSnap[g_RecSpaceArr[jdx].threadId] == cnt) break;
+        }
+        if(jdx == g_ThreadNum){
+            LOG_DEBUG(g_logger, "in checkAllPendingSpks, delete spk with no use, spk: "<< g_PendingDeleteSpks.front().first);
+            delete g_PendingDeleteSpks.front().first;
+            g_PendingDeleteSpks.pop();
+        }
+        else{
+            break;
+        }
+    }
+}
+void delayrm_spkObj(const SpkInfoChd *spk)
+{
+    checkAllPendingSpks();
+    if(spk == NULL){
+        return;
+    }
+    map<pthread_t, unsigned long > spkSnap;
+    for(size_t idx=g_ThreadNum - 1; idx >= 0; idx++){
+        unsigned long cnt1;
+        g_RecSpaceArr[idx].getAccnt(spkSnap[g_RecSpaceArr[idx].threadId], cnt1);
+    }
+    g_PendingDeleteSpks.push(make_pair(spk, spkSnap));
+}
 
 typedef struct{
 	float m_0Value;
@@ -94,81 +153,32 @@ TransScore getScoreFunc(ScoreConfig *param)
 }
 
 
-/**
- * SpkInfo for speaker template id_type_harm.param
- */
-class SpkInfoChd: public SpkInfo
-{
-    SpkInfoChd(const SpkInfoChd&);
-    SpkInfoChd& operator=(const SpkInfoChd&);
-public:
-    unsigned char servType;
-    int harmLevel;
-    SpkInfoChd(unsigned long spkId =0, unsigned char type=0, int level=0):
-        SpkInfo(spkId), servType(type), harmLevel(level)
-    { }
-    SpkInfoChd(const char *spkname)
-        :SpkInfo((unsigned long)0), servType(0), harmLevel(0)
-    {
-        fromStr(spkname);
-    }
-    string toStr()const{
-        ostringstream oss;
-        oss << spkId<<"_"<< std::hex<< std::showbase<< servType<< std::noshowbase<< std::dec<< "_" << harmLevel<< ".param";
-        return oss.str();
-    }
-    bool fromStr(const char* strSpk);
-};
-
 bool SpkInfoChd::fromStr(const char* strSpk){
     istringstream iss(strSpk);
     char chSep;
-    if(!(iss >> spkId)) return false;
+    if(!(iss >> this->spkId)) return false;
     if(!(iss.get(chSep) || chSep != '_')) return false;
-    if(!(iss >> std::hex>> servType>> std::dec)) return false;
+    int retval = iss.peek();
+    if(retval == EOF) return false;
+    int servtype;
+    if(retval == '0'){
+        char tmpch;
+        iss.get(tmpch);
+        iss.get(tmpch);
+        if(tmpch != 'x' && tmpch != 'X') return false;
+        if(!(iss >> std::hex>> servtype>> std::dec)) return false;
+    }
+    else{
+        if(!(iss >> servtype)) return false;
+    }
+    this->servType = servtype;
     if(!(iss.get(chSep) || chSep != '_')) return false;
     if(!(iss >> harmLevel)) return false;
     return true;
 }
 
-vector<const SpkInfoChd*> g_vecPendingRemoveSpks;
-bool checkSpkName(const char *name)
+static void ioareg_updateConfig()
 {
-    SpkInfoChd* spk = new SpkInfoChd();
-    if(!spk->fromStr(name)){
-        delete spk;
-        return false;
-    }
-    delete spk;
-    return true;
-}
-bool addSpkSample(const char* name, char* data, unsigned len)
-{
-    SpkInfoChd* spk = new SpkInfoChd();
-    if(!spk->fromStr(name)){
-        delete spk;
-        return false;
-    }
-    const SpkInfo* oldSpk;
-    bool ret = spkex_addSpk(spk, data, len, oldSpk);
-    if(oldSpk) g_vecPendingRemoveSpks.push_back(dynamic_cast<const SpkInfoChd*>(oldSpk));
-    return true;
-}
-void rmSpkSample(unsigned spkId)
-{
-    vector<const SpkInfo*> allSpks;
-    spkex_getAllSpks(allSpks);
-    for(size_t idx=0; idx < allSpks.size(); idx++){
-        if(allSpks[idx]->spkId == spkId){
-            spkex_rmSpk(allSpks[idx]);
-            g_vecPendingRemoveSpks.push_back(dynamic_cast<const SpkInfoChd*>(allSpks[idx]));
-        }
-    }
-}
-
-void ioareg_updateConfig()
-{
-
     if(g_AutoCfg.isUpdated("lid", "savedMusicPrecent")){
         pthread_mutex_lock(&g_MusicPrecentLock);
         Config_getValue(&g_AutoCfg, "lid", "savedMusicPrecent", g_iMusicPrecent);
@@ -190,11 +200,23 @@ void ioareg_updateConfig()
         pthread_mutex_lock(&g_AllProjsDirLock);
     }
 }
+
+void ioareg_maintain_procedure(time_t curTime)
+{
+    static time_t lasttime;
+    if(curTime > 3 + lasttime){
+        lasttime = curTime;
+        if(g_AutoCfg.checkAndLoad()){
+            ioareg_updateConfig();
+        }
+    }
+}
 bool ioareg_init()
 {
 	spkScoreCfg.m_0Value = 0;
 	spkScoreCfg.m_100Value = 100;
     Config_getValue(&g_AutoCfg, "", "saveAllTopDir", g_szAllPrjsDir);
+    Config_getValue(&g_AutoCfg, "", "saveDebugTopDir", g_szDebugBinaryDir);
     Config_getValue(&g_AutoCfg, "", "ifUseVAD", g_bUseVAD);
     Config_getValue(&g_AutoCfg, "", "ifUseMusicDetect", g_bUseMusicDetect);
     Config_getValue(&g_AutoCfg, "", "savedMusicPrecent", g_iMusicPrecent);
@@ -257,18 +279,19 @@ bool ioareg_init()
     }
 
     initLID(g_ThreadNum);
-	g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (g_ThreadNum));
+	//g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (g_ThreadNum));
+
+    g_RecSpaceArr = new RecogThreadSpace[g_ThreadNum];
     for (int i = 0; i < g_ThreadNum; ++i)
 	{
 		pthread_attr_t threadAttr;
 		pthread_attr_init(&threadAttr);
 		pthread_attr_setstacksize(&threadAttr, 2080 * 1024); // 120*1024
 		//pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-        RecogThreadSpace *tmpStr = new RecogThreadSpace;
-        tmpStr->threadIdx = i;
-		int retc = pthread_create(&g_pthread_id[i], &threadAttr, IoaRegThread, tmpStr);
+        g_RecSpaceArr[i].threadIdx = i;
+		int retc = pthread_create(&g_RecSpaceArr[i].threadId, &threadAttr, IoaRegThread, &g_RecSpaceArr[i]);
 		if(retc != 0){
-			LOG_ERROR(g_logger, "fail to create recognition thread, index "<< tmpStr->threadIdx);
+			LOG_ERROR(g_logger, "fail to create recognition thread, index "<< g_RecSpaceArr[i].threadIdx);
             exit(1);
 		}
 		pthread_attr_destroy(&threadAttr);
@@ -280,20 +303,17 @@ bool ioareg_rlse()
 {
     LOG_INFO(g_logger, "starting shutdown ioacas.");
 	for(int i = 0; i < g_ThreadNum; i++){
-		pthread_cancel(g_pthread_id[i]);
+		pthread_cancel(g_RecSpaceArr[i].threadId);
 	}
     for(int idx=0; idx < g_ThreadNum; idx++){
-        pthread_join(g_pthread_id[idx], NULL);
+        pthread_join(g_RecSpaceArr[idx].threadId, NULL);
     }
 
     if(g_bUseSpk) spkex_rlse();
     if(g_bSpkUseVad) FreeVADCluster();
 
-	if (g_pthread_id != NULL)
-	{
-		free(g_pthread_id);
-		g_pthread_id = NULL;
-	}
+    delete []g_RecSpaceArr;
+    g_RecSpaceArr = NULL;
     return true;
 }
 
@@ -315,31 +335,6 @@ static inline bool  checkAndSetLidResSt(CDLLResult &res, int nMax, float score)
 
 }
 
-#define CHECK_PERFOMANCE
-#ifdef CHECK_PERFOMANCE
-static unsigned mycounter;
-static inline void set_count(){
-    mycounter = clock();
-}
-static inline unsigned get_count(){
-    return clock() - mycounter;
-}
-
-#define CREATE_clockoutput(x) ostringstream clockoutput; clockoutput<< x<< " ";
-#define PUTPER_clockoutput(x) clockoutput<< x<< get_count()<< " ";
-#define LOG_clockoutput(x) x(clockoutput.str().c_str()); 
-#else
-static inline void set_count(){
-
-}
-static inline unsigned get_count(){
-    return 0;
-}
-#define CREATE_clockoutput(x)
-#define PUTPER_clockoutput(x)
-#define LOG_clockoutput(x) 
-#endif 
-
 static void vadProcess(RecogThreadSpace &rec, int hVad)
 {
     char* &pData = rec.projData.m_pData;
@@ -351,9 +346,6 @@ static void vadProcess(RecogThreadSpace &rec, int hVad)
 	char WriteLog[1024];
     logLen = 0;
     logLen += sprintf(WriteLog+logLen, "VADREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
-    #ifdef CHECK_PERFOMANCE
-    ostringstream clockoutput("OUTPUTCLOCK ");
-    #endif
     while(true){
         if(recBufLen < POSITIVE_PCM_LEN)
         {
@@ -361,11 +353,7 @@ static void vadProcess(RecogThreadSpace &rec, int hVad)
             rec.mcutBufLen = 0;
             break;
         }
-        set_count();
         bool retv = cutVAD(hVad, recBuf, recBufLen, rec.vadBuf, rec.vadBufLen);
-        #ifdef CHECK_PERFOMANCE
-        clockoutput<< "CUTVAD "<< recBufLen << " "<< rec.vadBufLen<< " "<< get_count()<< " ";
-        #endif
         if(retv){
         }
         else{
@@ -389,9 +377,6 @@ static void vadProcess(RecogThreadSpace &rec, int hVad)
         break;
     }
     LOG_INFO(g_logger, WriteLog<< "eop.");
-    #ifdef CHECK_PERFOMANCE
-    LOGFMTI(clockoutput.str().c_str());
-    #endif
 
 }
 
@@ -406,9 +391,6 @@ static void musicProcess(RecogThreadSpace &rec)
 	char WriteLog[1024];
     logLen = 0;
     logLen += sprintf(WriteLog+logLen, "MSCREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
-    #ifdef CHECK_PERFOMANCE
-    ostringstream clockoutput("OUTPUTCLOCK ");
-    #endif
     while(true){
         if(recBufLen < POSITIVE_PCM_LEN)
         {
@@ -417,13 +399,9 @@ static void musicProcess(RecogThreadSpace &rec)
             break;
         }
 
-        set_count();
-        int tmpVar;
+        int tmpVar = recBufLen;
         bool retm = MusicCut(rec.threadIdx, recBuf, recBufLen, rec.mcutBuf, tmpVar);
         rec.mcutBufLen = tmpVar;
-        #ifdef CHECK_PERFOMANCE
-        clockoutput<< "CUTMUSIC "<< recBufLen<< " "<< rec.mcutBufLen<< " "<< get_count()<< " ";
-        #endif
         if(retm){
         }
         else{
@@ -446,9 +424,6 @@ static void musicProcess(RecogThreadSpace &rec)
     }
     
     LOG_INFO(g_logger, WriteLog<< "eop.");
-    #ifdef CHECK_PERFOMANCE
-    LOGFMTI(clockoutput.str().c_str());
-    #endif
 }
 
 static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
@@ -460,9 +435,6 @@ static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
 	char WriteLog[1024];
     logLen = 0;
     logLen += sprintf(WriteLog+logLen, "LIDREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
-    #ifdef CHECK_PERFOMANCE
-    ostringstream clockoutput("OUTPUTCLOCK ");
-    #endif
     while(true){
         short *recBuf = reinterpret_cast<short*>(pData);
         unsigned recBufLen = dataLen / sizeof(short);
@@ -473,14 +445,10 @@ static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
             rec.vadBufLen = 0;
             break;
         }
-
-#if 0
+        /*
         if(hMCut != NULL){
             set_count();
             bool retm = cutMusic(hMCut, recBuf, recBufLen, rec.mcutBuf, rec.mcutBufLen);
-            #ifdef CHECK_PERFOMANCE
-            clockoutput<< "CUTMUSIC "<< recBufLen<< " "<< rec.mcutBufLen<< " "<< get_count()<< " ";
-            #endif
             if(retm){
             }
             else{
@@ -513,9 +481,6 @@ static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
         if(hVAD != -1){
             set_count();
             bool retv = cutVAD(hVAD, recBuf, recBufLen, rec.vadBuf, rec.vadBufLen);
-            #ifdef CHECK_PERFOMANCE
-            clockoutput<< "CUTVAD "<< recBufLen << " "<< rec.vadBufLen<< " "<< get_count()<< " ";
-            #endif
             if(retv){
             }
             else{
@@ -543,31 +508,17 @@ static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
             sprintf(WriteLog+strlen(WriteLog), "too short ");
             break;
         }
-#endif
+        */
         int nMax;
         float score;
-        /*
-        const char* debugDir = "ioacas/debug/";
-        if(if_directory_exists(debugDir)){
-            char wholePath[MAX_PATH];
-            sprintf(wholePath, "%sbeforeTLI_%lu", debugDir, pid);
-            save_binary_data(wholePath, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short), NULL);
-        }*/
         LOG_TRACE(g_logger, "LIDREG before spkex_score, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
-        set_count();
         scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
-        #ifdef CHECK_PERFOMANCE
-        clockoutput<< "LIDREG "<< recBufLen << " 0 "<< get_count()<< " ";
-        #endif
         if(checkAndSetLidResSt(rec.result, nMax, score)){
             reportIoacasResult(rec.result, WriteLog, logLen);
         }
         break;
     }
     LOG_INFO(g_logger, WriteLog<< "eop.");
-    #ifdef CHECK_PERFOMANCE
-    LOGFMTI(clockoutput.str().c_str());
-    #endif
 }
 
 static void spkRegProcess(RecogThreadSpace &rec)
@@ -580,7 +531,6 @@ static void spkRegProcess(RecogThreadSpace &rec)
 	char WriteLog[1024];
     logLen = 0;
     logLen += snprintf(WriteLog+logLen, MAX_LINE - logLen,  "SPKREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
-    CREATE_clockoutput("SPKREG CHECKPERFORMANCE");
     while(true){
         short *recBuf = reinterpret_cast<short*>(pData);
         unsigned recBufLen = dataLen / sizeof(short);
@@ -592,10 +542,8 @@ static void spkRegProcess(RecogThreadSpace &rec)
             break;
         }
         if(g_bSpkUseMCut){
-            int tmpval;
-            set_count();
+            int tmpval = recBufLen;
             bool retmc = MusicCut(rec.threadIdx, recBuf, recBufLen, rec.mcutBuf, tmpval);
-            PUTPER_clockoutput("MUSICCUT");
             rec.mcutBufLen = tmpval;
             if(!retmc){ rec.mcutBufLen = 0; }
             recBuf = rec.mcutBuf;
@@ -608,10 +556,8 @@ static void spkRegProcess(RecogThreadSpace &rec)
             }
         }
         if(g_bSpkUseVad){
-            set_count();
-            int tmpval;
+            int tmpval = recBufLen;
             bool retvad = VADBuffer(true, recBuf, recBufLen, rec.vadBuf, tmpval);
-            PUTPER_clockoutput("VADCUT");
             rec.vadBufLen = tmpval;
             if(!retvad) rec.vadBuf = 0;
             recBuf = rec.vadBuf;
@@ -640,7 +586,6 @@ static void spkRegProcess(RecogThreadSpace &rec)
         break;
     }
     LOG_INFO(g_logger, WriteLog<< "eop.");
-    LOG_clockoutput(LOGFMTI);
 }
 
 struct WavBuf{
@@ -687,7 +632,7 @@ static void prepare_rec_bufs(const vector<DataBlock> &datavec,
 {
     unsigned totalLen = 0;
     for(unsigned idx = 0; idx < datavec.size(); idx++){
-        totalLen += datavec[idx].m_len;
+        totalLen += datavec[idx].len;
     }
     assert(totalLen % sizeof(short) == 0);
     totalLen /= sizeof(short);
@@ -710,10 +655,11 @@ static void prepare_rec_bufs(const vector<DataBlock> &datavec,
     
     unsigned curLen = 0;
     for(unsigned idx=0; idx < datavec.size(); idx++){
-        memcpy(regSpace->projData.m_pData + curLen, datavec[idx].m_buf, datavec[idx].m_len);
-        curLen += datavec[idx].m_len;
+        memcpy(regSpace->projData.m_pData + curLen, datavec[idx].getPtr(), datavec[idx].len);
+        curLen += datavec[idx].len;
     }
 }
+
 
 
 void* IoaRegThread(void *param)
@@ -770,6 +716,17 @@ void* IoaRegThread(void *param)
                 spkRegProcess(This_Buf);   
             }
 
+            if(g_bUseBamp && ptrBuf->getBampHit()){
+                char savedfile[MAX_PATH];
+                gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, ptrBuf->getPrjTime().tv_sec, ptrBuf->ID, NULL, NULL, NULL);
+                if(!saveWave(This_Buf.projData.m_pData, This_Buf.projData.m_iDataLen, savedfile)){
+                    LOGFMT_WARN(g_logger, "in IoaRegThread failed to write wave to file %s.", savedfile);
+                }
+                else{
+                    LOGFMT_TRACE(g_logger, "PID=%lu SavedPath=%s have saved project pointed by bamp match.", ptrBuf->ID, savedfile);
+                }
+            }
+            This_Buf.addAccnt();
             //保存节目号，用于后面的去重.
 			if(g_bSaveAfterRec){
 				pthread_mutex_lock(&g_lockNewReported);
@@ -789,7 +746,7 @@ void* IoaRegThread(void *param)
             else{
                 pthread_mutex_unlock(&g_AllProjsDirLock);
             }
-
+            
             release_rec_bufs();
             ptrBuf->finishMainReg();
 			returnBuffer(ptrBuf);

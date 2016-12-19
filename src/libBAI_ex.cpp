@@ -44,6 +44,7 @@ using namespace FixedAudioModel;
 #define MAX_PATH 512
 
 char g_szBampIp[50] = "";
+unsigned short g_uBampPort = 10019;
 const unsigned MAX_BUF = 1024;
 const char g_TempDir[MAX_PATH] = "temp/";
 float g_fReportBampThrd = 86;
@@ -74,7 +75,7 @@ SummitBampResult funcBampSubmitResult;
 const unsigned short g_uBampFDServType = 0xc8;
 const unsigned short g_uBampJCServType = 0xc3;
 static char g_szBampCfgFile[MAX_PATH] = "ioacas/Bamp.cfg";
-static unsigned g_uBampThreadNum = 1;
+unsigned g_uBampThreadNum = 1;
 static char g_szBampLibFile[MAX_PATH] = "ioacas/output/database.dat";
 //static time_t g_BampLibLastTime = 0;
 
@@ -126,6 +127,101 @@ bool BampMatchObject::loadModel(const char *libFile)
     return true;
 }
 
+/**
+ * the memory pointed by pData is freed inside function.
+ */
+bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
+{
+    AutoLock mylock(this->lock);
+    if(!this->bHasModel){
+        BLOGT("in bamp_match no library to use.");
+        return false;
+    }
+    vector<BAI_InputItem> intoEng;
+    intoEng.resize(allData.size());
+    for(size_t idx=0; idx < allData.size(); idx++){
+        intoEng[idx].iAudioID = idx;
+        intoEng[idx].acAudioUrl[0] = '\0';
+        const vector<DataBlock>& curData = allData[idx].data;
+        char *tmpSz = new char[allData[idx].tolLen];
+        unsigned tolLen = 0;
+        for(size_t jdx=0; jdx < curData.size(); jdx++){
+            memcpy(tmpSz + tolLen, curData[jdx].getPtr() + curData[jdx].offset, curData[jdx].len);
+            tolLen += curData[jdx].len;
+        }
+        assert(tolLen == allData[idx].tolLen);
+        intoEng[idx].pcDataBuffer = tmpSz;
+        intoEng[idx].iBufferSize = tolLen;
+        intoEng[idx].iDataType = 0;
+        BLOGT("saved audio segment before bamp match call, file: %s.", saveProjectSegment(allData[idx].curtime, allData[idx].pid, &allData[idx].preLen,  intoEng[idx].pcDataBuffer, intoEng[idx].iBufferSize).c_str());
+    }
+    BAI_ResultList *pRes = NULL;
+    BAI_Code err = BAI_Retrieval_Partly_VAD(&intoEng[0], intoEng.size(), pRes, &(this->hdl));
+    if(err != BAI_OK){
+        BLOGE("in bamp_match failed to call BAI_Retrieval_Partly, err: %d.", err);
+        return false;
+    }
+
+    CDLLResult desres;
+    WavDataUnit desdata;
+    desres.m_iDataUnitNum = 1;
+    desres.m_pDataUnit[0] = &desdata;
+    if(pRes == NULL){
+        BLOGE("in bamp_match, no result after BAI_Retrieval.. pRes == NULL.");
+        return false;
+    }
+    ostringstream oss;
+    for(size_t idx=0; idx < intoEng.size(); idx++){
+        unsigned iTestID = pRes[idx].iTestID;
+        unsigned long pid = allData[iTestID].pid;
+        unsigned len = allData[iTestID].tolLen;
+        unsigned preLen = allData[iTestID].preLen;
+        struct timeval curtime = allData[iTestID].curtime;
+        desdata.m_iPCBID = pid;
+        desdata.m_iDataLen = allData[iTestID].data[0].len;
+        desdata.m_pData = allData[iTestID].data[0].getPtr() + allData[iTestID].data[0].offset;
+        oss.seekp(0);
+        oss<< "PID=" << pid<< " "<< "WaveLen="<< (len) / 16000<< " Offset="<< preLen / 16000<< " ";
+        if(pRes[idx].iResultNum == 0){
+            BLOGI("%sbamp_match no result after BAI_Retrieval... err: %d", oss.str().c_str(), pRes[idx].eErrCode);
+            continue;
+        }
+        long stpos = oss.tellp();
+        for(size_t jdx=0; jdx < pRes[idx].iResultNum; jdx ++){
+            oss.seekp(stpos);
+            BAI_ResultItem& curhit = pRes[idx].pstResultItems[jdx];
+            if(curhit.fMatchedRate < 1.0001){
+                curhit.fMatchedRate *= 100;
+            }
+            if(curhit.fMatchedRate < g_fReportBampThrd){
+                continue;
+            }
+            oss<< " CfgName="<< curhit.acAudioUrl;
+            sscanf(curhit.acAudioUrl, "%u", &desres.m_iTargetID);
+            if(desres.m_iTargetID % 2){
+                desres.m_iAlarmType = g_uBampJCServType;
+            }
+            else{
+                desres.m_iAlarmType = g_uBampFDServType;
+            }
+            desres.m_iTargetID /= 2;
+            allData[iTestID].targetID = desres.m_iTargetID;
+            desres.m_iHarmLevel = 0;
+            desres.m_fTargetMatchLen = curhit.fDurationS;
+            desres.m_fLikely = curhit.fMatchedRate;
+            desres.m_fSegLikely[0] = curhit.fMatchedRate;
+            desres.m_fSegPosInPCB[0] = ((float)preLen) / 16000 + curhit.fTimeStartInTestS;
+            desres.m_fSegPosInTarget[0] = curhit.fTimeStartInWaveS;
+            funcBampSubmitResult(curtime, &desres, allData[iTestID].data, oss);
+            oss.put('\0');
+            BLOGI("%s", oss.str().c_str());
+        }
+    }
+    delete [] pRes;
+    return true;
+}
+
+/*
 bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime)
 {
     AutoLock mylock(this->lock);
@@ -212,7 +308,7 @@ bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, u
     
     return bHit;
 }
-
+*/
 vector<BampMatchObject* > g_AllBampObjects;
 static LockHelper g_BampLock;
 static pthread_key_t g_BampHandleKey;
@@ -222,18 +318,16 @@ static pthread_t g_BampThreadID;
 
 static map<unsigned, SampleInfoStruct> g_mBampSamples;
 
-//TODO return true if all handles succeed.
+// return true if all handles succeed.
 static inline bool bamp_loadNewLib(const char* libFile)
 {
     bool ret = true;
     AutoLock lock(g_BampLock);
     vector<BampMatchObject*>::iterator it = g_AllBampObjects.begin();
     for(; it!=g_AllBampObjects.end(); it++){
-        (*it)->lock.lock();
         if(!(*it)->loadModel(libFile)){
             ret = false;
         }
-        (*it)->lock.unLock();
     }
     return ret;
 }
@@ -489,12 +583,16 @@ bool parseModelInfo(char *msg, unsigned & outlen)
     }
     else{
         result.set_status(LoadResult::SUCCESS);
-        if(!copyFile_S(modelUrl.c_str(), g_szBampLibFile)){
-            BLOGE("failed to copy new lib to subdir for persistent use. strerr: %s", strerror(errno));
+        if(!moveFile(modelUrl.c_str(), g_szBampLibFile)){
+            BLOGE("failed to move new lib to libdir for persistent use. strerr: %s", strerror(errno));
         }
-        else{
-            remove(modelUrl.c_str());
-        }
+
+        //if(!copyFile_S(modelUrl.c_str(), g_szBampLibFile)){
+        //    BLOGE("failed to copy new lib to subdir for persistent use. strerr: %s", strerror(errno));
+        //}
+        //else{
+        //    remove(modelUrl.c_str());
+        //}
     }
     BLOGI("loadresult: %s",result.ShortDebugString().c_str());
     ostringstream oss;
@@ -585,7 +683,6 @@ int initTcpServer(const char* szIp, unsigned short port)
 
 void * UpdateLibraryThread(void *param)
 {
-    unsigned short uPort = 10019;
     char szIp[50];
     if(g_szBampIp[0] == '\0'){
         strcpy(szIp, "192.168.10.95");
@@ -593,8 +690,8 @@ void * UpdateLibraryThread(void *param)
     else{
         strncpy(szIp, g_szBampIp, 50);
     }
-    BLOGI("bamp server --- %s:%u", szIp, uPort);
-    int servfd = initTcpServer(g_szBampIp, uPort);
+    BLOGI("bamp server --- %s:%u", szIp, g_uBampPort);
+    int servfd = initTcpServer(g_szBampIp, g_uBampPort);
     struct pollfd fdarr[1];
     fdarr[0].fd = servfd;
     fdarr[0].events = POLLIN;

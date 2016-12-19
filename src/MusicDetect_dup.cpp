@@ -32,7 +32,7 @@ MscCutHandle openMusicCut(const char *cfgFile)
 {
     pthread_mutex_lock(&g_MscCutsLock);
     if(g_uAccumMscCuts == 0){
-        memcpy(g_szCfgFile, cfgFile, MAX_PATH);   
+        strncpy(g_szCfgFile, cfgFile, MAX_PATH);
     }
     else{
         if(cfgFile != NULL && strcmp(g_szCfgFile, cfgFile) != 0){
@@ -70,7 +70,7 @@ void finishOpenMusicCut()
 bool cutMusic(MscCutHandle hdl, short* src, unsigned iLen, short* &dst, unsigned &oLen)
 {
     assert(hdl - g_arrAllMscCuts < g_uAccumMscCuts);
-    int olen;
+    int olen = iLen;
     MusicCut(hdl - g_arrAllMscCuts, src, iLen, dst, olen);
     oLen = olen;
     return true;
