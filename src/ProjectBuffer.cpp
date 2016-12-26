@@ -322,7 +322,8 @@ unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, time_t curTime)
         }
     }
     arrArrivalRecords.push_back(ArrivalRecord(curTime, arrUnits.size()-1, arrUnits.back().len));
-    if(ret > 0){
+
+    if(!bFull && ret > 0){
         if(arrUnits.size() - 1 > ceilUnitIdx || (arrUnits.size() -1 == ceilUnitIdx && arrUnits.back().len >= ceilOffset)){
             LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as the accumulated data reaches to maximum.", this->ID);
             turnFull();
@@ -336,7 +337,7 @@ void ProjectBuffer::finishRecv()
 {
     AutoLock lock(m_BufferLock);
     LOGFMT_DEBUG(g_BufferLogger, "PID=%lu the state turns to FULL, as being notified.", this->ID);
-    turnFull();
+    if(! bFull) turnFull();
 }
 
 bool ProjectBuffer::isFull(time_t curTime)

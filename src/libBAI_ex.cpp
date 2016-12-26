@@ -180,7 +180,7 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
         desdata.m_iPCBID = pid;
         desdata.m_iDataLen = allData[iTestID].data[0].len;
         desdata.m_pData = allData[iTestID].data[0].getPtr() + allData[iTestID].data[0].offset;
-        oss.seekp(0);
+	oss.str("");
         oss<< "PID=" << pid<< " "<< "WaveLen="<< (len) / 16000<< " Offset="<< preLen / 16000<< " ";
         if(pRes[idx].iResultNum == 0){
             BLOGI("%sbamp_match no result after BAI_Retrieval... err: %d", oss.str().c_str(), pRes[idx].eErrCode);

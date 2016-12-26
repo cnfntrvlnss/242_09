@@ -144,9 +144,11 @@ static void initGlobal(BufferConfig &myBufCfg)
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
     Config_getValue(&g_AutoCfg, "", "ifUseBAMP", g_bUseBamp);
+    Config_getValue(&g_AutoCfg, "", "reportBampThreshold", g_fReportBampThrd);
     Config_getValue(&g_AutoCfg, "", "baiThreadNum", g_uBampThreadNum);
     Config_getValue(&g_AutoCfg, "", "serverBampIp", g_szBampIp);
     Config_getValue(&g_AutoCfg, "", "serverBampPort", g_uBampPort);
+
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
@@ -172,6 +174,7 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(g_AutoCfg.configFile)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bUseBamp)
+            LOG4Z_VAR(g_fReportBampThrd)
             LOG4Z_VAR(g_uBampThreadNum)
             LOG4Z_VAR(g_szBampIp)
             LOG4Z_VAR(g_uBampPort)
@@ -337,6 +340,7 @@ void * bampMatchThread(void *)
             for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end(); it++){
                 BampMatchParam tmpPar(it->second->ID, it->second);
                 it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data, tmpPar.bPreHit);
+		tmpPar.curtime = it->second->getPrjTime();
                 if(tmpPar.data.size() == 0) continue;
                 unsigned tolLen = 0;
                 for(unsigned idx=0; idx < tmpPar.data.size(); idx++){
@@ -451,6 +455,7 @@ bool saveWaveAsAlaw(const vector<DataBlock>& vecData, const char* filePath)
             fwrite(&tmpCh, 1, 1, fp);
         }
     }
+    fclose(fp);
     return true;
 }
 
