@@ -715,7 +715,7 @@ void* IoaRegThread(void *param)
             if(g_bUseSpk){
                 spkRegProcess(This_Buf);   
             }
-
+            /*
             if(g_bUseBamp && ptrBuf->getBampHit()){
                 char savedfile[MAX_PATH];
                 gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, ptrBuf->getPrjTime().tv_sec, ptrBuf->ID, NULL, NULL, NULL);
@@ -726,6 +726,7 @@ void* IoaRegThread(void *param)
                     LOGFMT_TRACE(g_logger, "PID=%lu SavedPath=%s have saved project pointed by bamp match.", ptrBuf->ID, savedfile);
                 }
             }
+            */
             This_Buf.addAccnt();
             //保存节目号，用于后面的去重.
 			if(g_bSaveAfterRec){

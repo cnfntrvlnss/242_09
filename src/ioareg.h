@@ -19,8 +19,8 @@ using namespace std;
 //using namespace BufferGlobal;
 using namespace zen4audio;
 
-extern bool g_bUseBamp;
-extern char m_TSI_SaveTopDir[];
+//extern bool g_bUseBamp;
+//extern char m_TSI_SaveTopDir[];
 extern const unsigned int g_uVADType;
 extern const unsigned int g_uVADID;
 extern const unsigned int g_uMusicType;

@@ -205,14 +205,16 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
                 desres.m_iAlarmType = g_uBampFDServType;
             }
             desres.m_iTargetID /= 2;
-            allData[iTestID].targetID = desres.m_iTargetID;
+            //allData[iTestID].targetID = desres.m_iTargetID;
             desres.m_iHarmLevel = 0;
             desres.m_fTargetMatchLen = curhit.fDurationS;
             desres.m_fLikely = curhit.fMatchedRate;
             desres.m_fSegLikely[0] = curhit.fMatchedRate;
             desres.m_fSegPosInPCB[0] = ((float)preLen) / 16000 + curhit.fTimeStartInTestS;
             desres.m_fSegPosInTarget[0] = curhit.fTimeStartInWaveS;
-            funcBampSubmitResult(curtime, &desres, allData[iTestID].data, oss);
+            allData[iTestID].pResult = &desres;
+            funcBampSubmitResult(allData[iTestID], oss);
+            //allData[iTestID].pResult = NULL;
             oss.put('\0');
             BLOGI("%s", oss.str().c_str());
         }

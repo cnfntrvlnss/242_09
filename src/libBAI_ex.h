@@ -8,6 +8,8 @@
 #ifndef _LIBBAI_EX_H
 #define _LIBBAI_EX_H
 
+#include "ProjectBuffer.h"
+
 #include <vector>
 #include <iostream>
 #include <time.h>
@@ -15,10 +17,11 @@
 #include "../include/interface242.h"
 
 struct BampMatchParam{
-    explicit BampMatchParam(unsigned long param1):
-        pid(param1), targetID(0)
+    explicit BampMatchParam(unsigned long param1, zen4audio::ProjectBuffer *param2):
+        pid(param1), ptrBuf(param2), pResult(NULL)
     {}
     unsigned long pid;
+    bool bPreHit;
     unsigned preIdx;
     unsigned preOffset;
     unsigned preLen;
@@ -26,8 +29,10 @@ struct BampMatchParam{
     unsigned endOffset;
     unsigned tolLen;
     std::vector<DataBlock> data;
+    zen4audio::ProjectBuffer *ptrBuf;
+    CDLLResult *pResult;
     struct timeval curtime;
-    unsigned targetID;
+    //unsigned targetID;
 };
 struct BampMatchObject{
     BampMatchObject(const char *libfile);
@@ -61,7 +66,7 @@ extern float g_fReportBampThrd;
 extern unsigned g_uBampThreadNum;
 extern const unsigned short g_uBampFDServType;
 extern const unsigned short g_uBampJCServType;
-typedef void (*SummitBampResult)(struct timeval curtime, CDLLResult *pResult, const std::vector<DataBlock>& vecData, std::ostream& oss);
+typedef void (*SummitBampResult)(BampMatchParam param, std::ostream& oss);
 bool bamp_init(SummitBampResult callbck);
 bool bamp_rlse();
 //bool bamp_match(unsigned long pid, short *pcmData, unsigned pcmLen, unsigned preLen, struct timeval curtime);

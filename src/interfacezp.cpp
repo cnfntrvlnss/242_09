@@ -186,7 +186,7 @@ static void initGlobal(BufferConfig &myBufCfg)
 
 static void * bampMatchThread(void *);
 static void *ioacas_maintain_procedure(void *);
-static void reportBampResultSeg(struct timeval curtime, CDLLResult *pResult, const vector<DataBlock>& vecData, ostream& oss);
+static void reportBampResultSeg(BampMatchParam param, ostream& oss);
 
 int InitDLL(int iPriority,
         int iThreadNum,
@@ -335,8 +335,8 @@ void * bampMatchThread(void *)
             //struct timeval curtime;
             //gettimeofday(&curtime, NULL);
             for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end(); it++){
-                BampMatchParam tmpPar(it->second->ID);
-                it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data);
+                BampMatchParam tmpPar(it->second->ID, it->second);
+                it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data, tmpPar.bPreHit);
                 if(tmpPar.data.size() == 0) continue;
                 unsigned tolLen = 0;
                 for(unsigned idx=0; idx < tmpPar.data.size(); idx++){
@@ -356,10 +356,10 @@ void * bampMatchThread(void *)
             for(size_t idx=0; idx < allBufs.size(); idx++){
                 bool bhit = false;
                 BampMatchParam &par = allBufs[idx];
-                if(par.targetID != 0){
+                if(par.pResult != NULL){
                     bhit = true;
                 }
-                allProjs[par.pid]->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, bhit);
+                allProjs[par.pid]->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, par.data, bhit);
             }
             break;
         }
@@ -453,9 +453,41 @@ bool saveWaveAsAlaw(const vector<DataBlock>& vecData, const char* filePath)
     }
     return true;
 }
-//TODO save alaw wave.
-void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, const vector<DataBlock>& vecData, ostream &oss)
+
+bool saveWaveAsAlaw(FILE *fp, vector<DataBlock> &blks)
 {
+    unsigned len = 0;
+    for(size_t idx=0; idx < blks.size(); idx++){
+        DataBlock& curblk = blks[idx];
+        len += curblk.len;
+    }
+    if(len == 0){ return true; }
+    char * tmpAlaw = (char*)malloc(len / 2);
+    unsigned nowIdx = 0;
+    for(size_t idx=0; idx < blks.size(); idx++){
+        DataBlock& curblk = blks[idx];
+        short *tmppcm = reinterpret_cast<short*>(curblk.getPtr() + curblk.offset);
+        for(size_t jdx=0; jdx < curblk.len / 2; jdx ++){
+            tmpAlaw[nowIdx ++] = linear2alaw(tmppcm[jdx]);
+        }
+    }
+    assert(nowIdx = len / 2);
+    size_t retw = fwrite(tmpAlaw, 1, nowIdx, fp);
+    if(retw != nowIdx){
+        LOGFMT_ERROR(g_logger, "failed write data to file, size=%lu, written=%lu error: %s", nowIdx, retw, strerror(errno));
+    }
+    free(tmpAlaw);
+    if(retw != nowIdx) return false;
+    return true;
+}
+
+static char g_sz256Zero[256];
+//TODO save alaw wave.
+void reportBampResultSeg(BampMatchParam prm, ostream &oss)
+{
+    CDLLResult *pResult = prm.pResult;
+    struct timeval curtime = prm.curtime;
+    vector<DataBlock> & vecData = prm.data;
     oss<<  " CfgID="<< pResult->m_iTargetID <<" InProjectStart="<< pResult->m_fSegPosInPCB[0]<< " MatchedDuration="<< pResult->m_fTargetMatchLen<<" InCfgStart="<< pResult->m_fSegPosInTarget[0]<< " MatchRate="<< pResult->m_fSegLikely[0];
     char savedfile[MAX_PATH];
     savedfile[0] = '\0';
@@ -471,16 +503,28 @@ void reportBampResultSeg(const struct timeval curtime, CDLLResult *pResult, cons
     char projSt[20];
     snprintf(projSt, 20, "_%.2f", pResult->m_fSegPosInPCB[0]);
     insertStrAt0(stSufPtr, projSt);
-    snprintf(pResult->m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);
-    if(access(savedfile, F_OK) != 0){
-        if(!saveWaveAsAlaw(vecData, savedfile)){
-        //if(!saveWave(prj.m_pData, prj.m_iDataLen, savedfile)){
-            LOGFMT_ERROR(g_logger, "reportBampResultSeg failed to write wave to file %s.", savedfile);
-            return;
-        }
-        oss<< " SavedPath="<< pResult->m_strInfo << " ";
+    if(!saveWaveAsAlaw(vecData, savedfile)){
+        LOGFMT_ERROR(g_logger, "reportBampResultSeg failed to write bamp pointed wave segment to file %s.", savedfile);
     }
-
+    else{
+        oss<<" SegmentPath="<< savedfile;
+    }
+    
+    gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, curtime.tv_sec, prj.m_iPCBID, NULL, NULL, NULL);
+    stSufPtr = strrchr(savedfile, '.');
+    strcpy(stSufPtr+1, "pcm");
+    if(!prm.bPreHit){
+        FILE* fp = fopen(savedfile, "wb");
+        if(fp == NULL){
+            LOG_ERROR(g_logger, "failed to open bamp report file, file: "<< savedfile<< " error: "<< strerror(errno));
+        }
+        else{
+            fwrite(g_sz256Zero, 256, 1, fp);
+            prm.ptrBuf->setBampFile(fp, saveWaveAsAlaw);
+        }
+    }
+    snprintf(pResult->m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);
+    oss<< " ReportPath="<< pResult->m_strInfo;
 #endif
     g_ReportResultAddr(g_iModuleID, pResult);
 }

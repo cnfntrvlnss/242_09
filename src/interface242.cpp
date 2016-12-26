@@ -135,7 +135,8 @@ static char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";// save hited 
 static bool g_bDiscardable=true;// when feeding data.
 bool g_bSaveAfterRec=false; // when after processing, for project ID.
 
-string m_strIp;
+char g_szEth4ReportIP[50];
+static string g_strIp;
 LoggerId g_logger;
 
 std::map<unsigned long,ProjRecord_t> NewReportedID;
@@ -159,10 +160,11 @@ static void initGlobal(BufferConfig &myBufCfg)
 	char szLangReports[256] = "14 0x20,";
     char szLangReportFilter[256] = "0x20 99,";
 
-    Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
-    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
+    Config_getValue(&g_AutoCfg, "", "eth4ReportIP", g_szEth4ReportIP);
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
+    Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
+    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
@@ -173,6 +175,7 @@ static void initGlobal(BufferConfig &myBufCfg)
 
     myBufCfg.waitLength *= 16000;
 	
+    if(strlen(g_szEth4ReportIP) > 0) g_strIp = GetLocalIPByIF(g_szEth4ReportIP);
 	g_mLangReports = parseLangReportsFromStr(szLangReports);
     parseReportFilter(szLangReportFilter, g_mLangReportFilter);
 	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
@@ -187,6 +190,8 @@ static void initGlobal(BufferConfig &myBufCfg)
     LOG_INFO(g_logger, "version --- "<< strVer);
 #define LOG4Z_VAR(x) << #x "=" << x << "\n"
     LOG_INFO(g_logger, "====================config====================\n" 
+            LOG4Z_VAR(g_szEth4ReportIP)
+            LOG4Z_VAR(g_strIp)
             LOG4Z_VAR(g_AutoCfg.configFile)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bDiscardable)
@@ -216,7 +221,6 @@ int InitDLL(int iPriority,
     g_iModuleID = iModuleID;
     g_ReportResultAddr = func;
     
-    m_strIp = GetLocalIP();
     BufferConfig buffconfig;
     initGlobal(buffconfig);
 
@@ -422,7 +426,7 @@ bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
     time_t cur_time;
     time(&cur_time);
     gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, cur_time, pid, &alarmType, &configID, &confidence);
-    snprintf(result.m_strInfo, 1024, "%s:%s", m_strIp.c_str(), savedfile);
+    snprintf(result.m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);
     bool retSave = saveWave((char*)result.m_pDataUnit[0]->m_pData, result.m_pDataUnit[0]->m_iDataLen, savedfile);
     if(retSave){
         if(writeLog!=NULL){

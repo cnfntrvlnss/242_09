@@ -8,6 +8,7 @@
 #ifndef PROJECTBUFFER__H
 #define PROJECTBUFFER__H
 
+#include "utilites.h"
 #include <sys/time.h>
 #include <pthread.h>
 #include <climits>
@@ -17,6 +18,7 @@
 #include <set>
 #include <ostream>
 
+typedef bool(*FuncSaveData)(FILE*, std::vector<DataBlock>&);
 namespace zen4audio{
 
 /*{
@@ -95,30 +97,33 @@ public:
         idx = this->bampEndIdx;
         st = this->bampEndOffset;
     }*/
-    void setBampEndPos(unsigned preIdx, unsigned preSt, unsigned idx, unsigned st, bool bHit){
+    void setBampEndPos(unsigned preIdx, unsigned preSt, unsigned idx, unsigned st, std::vector<DataBlock>& data, bool bHit){
         AutoLock lock(m_BufferLock);
         assert(this->bampEndIdx == preIdx);
         assert(this->bampEndOffset == preSt);
         this->bampEndIdx = idx;
         this->bampEndOffset = st;
-        if(bHit) this->bBampHit = true;
+        if(this->bBampHit){
+            if(this->bampFp) this->funcSaveData(bampFp, data);
+        }
+        else if(bHit){
+            if(this->bampFp){
+                std::vector<DataBlock> allData;
+                getDataSegment(1, 0, idx, st, allData);
+                funcSaveData(bampFp, allData);
+            }
+            this->bBampHit = true;
+        }
     }
-    void getUnBampData(unsigned &idx, unsigned &st, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data);
-    /*
-    unsigned getBampEndPos(){
-        AutoLock lock(m_BufferLock);
-        return this->uBampEnd;   
-    }
-    void setBampResult(unsigned segSt, unsigned len, bool bHit){
-        AutoLock lock(m_BufferLock);
-        assert(segSt == this->uBampEnd);
-        uBampEnd += len;
-        if(bHit) this->bBampHit = true;
-    }
-    */
+    void getUnBampData(unsigned &idx, unsigned &st, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit);
     bool getBampHit(){
         AutoLock lock(m_BufferLock);
         return this->bBampHit;
+    }
+    void setBampFile(FILE *fp, FuncSaveData addr){
+        AutoLock lock(m_BufferLock);
+        bampFp = fp;
+        funcSaveData = addr;
     }
     void startMainReg(struct timeval curtime = ZERO_TIMEVAL){
         //if(memcmp(&curtime, &ZERO_TIMEVAL, sizeof(struct timeval) == 0)){
@@ -145,17 +150,7 @@ public:
         AutoLock lock(m_BufferLock);
         return bFull;
     }
-    /*
-    bool isNeedBamp(){
-        //std::vector<DataBlock>::iterator it = arrUnits.begin();
-        //unsigned total = 0;
-        //while(++it != arrUnits.end()){
-        //    total += it->m_len;
-        //}
-        if(bFull && ) return false;
-        else return true;
-    }
-    */
+
     unsigned recvData(char *data, unsigned len, time_t curTime = 0);
     void finishRecv();
     void init(){
@@ -173,6 +168,8 @@ private:
         fullOffset = arrArrivalRecords.back().offset;
     }
 
+    //bool saveBampProject(unsigned idx, unsigned offset);
+    void getDataSegment(unsigned idx0, unsigned offset0, unsigned idx1, unsigned offset1, std::vector<DataBlock>& data);
 public:
     struct BufferConfig{
         BufferConfig():
@@ -207,6 +204,9 @@ private:
     bool bBampHit;
     bool bRelsed;
     //unsigned uBampEnd;
+    FILE *bampFp;// should be closed in relse.
+    FuncSaveData funcSaveData;
+    //std::string bampProjectPath;
     unsigned bampEndIdx;
     unsigned bampEndOffset;
     unsigned fullUnitIdx;

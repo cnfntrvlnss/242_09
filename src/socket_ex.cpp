@@ -67,6 +67,31 @@ string GetLocalIP()
     else return condIP;
 } 
 
+string GetLocalIPByIF(const char *eth)
+{          
+    char retIP[50];
+    retIP[0] = '\0';
+	const char *ip = "127.0.0.1";    
+	int fd;      
+    struct ifreq ifr;
+    strncpy(ifr.ifr_name, eth, IF_NAMESIZE);
+    ifr.ifr_name[IF_NAMESIZE - 1] = '\0';
+
+	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) >= 0)      
+	{      
+        if (ioctl (fd, SIOCGIFADDR, (char *) &ifr) == 0)      
+        {      
+            ip=(inet_ntoa(((struct sockaddr_in*)(&ifr.ifr_addr))->sin_addr));      
+            strncpy(retIP, ip, 50);
+        }
+        else{
+            fprintf(stderr, "failed to fetch eth divce addr info. eth: %s.\n", eth);
+        }
+		close (fd);
+	} 
+    if(retIP[0] != '\0') return retIP;
+    else return GetLocalIP();
+} 
 string addr2str(const struct sockaddr *addr)
 {
     const struct sockaddr_in *addrin = reinterpret_cast<const struct sockaddr_in*>(addr);

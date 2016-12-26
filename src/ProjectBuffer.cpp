@@ -4,6 +4,7 @@
     > Mail:  zhengshurui@thinkit.cn
     > Created Time: Mon 12 Sep 2016 12:59:18 AM PDT
  ************************************************************************/
+#include "ProjectBuffer.h"
 
 #include <pthread.h>
 #include <sys/time.h>
@@ -17,13 +18,12 @@
 #include <sstream>
 #include <algorithm>
 #include <iterator>
-using namespace std;
 
 #include "utilites.h"
-#include "ProjectBuffer.h"
 #include "log4z.h"
 extern zsummer::log4z::ILog4zManager *g_Log4zManager;
 
+using namespace std;
 
 #define PCM_PERSEC_SMPS 8000
 #define PCM_PERSEC_LEN 16000
@@ -176,6 +176,8 @@ void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
     this->bFull = false;
     this->bAlloc = true;
     this->bBampHit = false;
+    this->bampFp = NULL;
+    this->funcSaveData = NULL;
     this->bRelsed = false;
     //this->uBampEnd = 0;
     this->bampEndIdx = 1;
@@ -201,36 +203,6 @@ void ProjectBuffer::getData(vector<DataBlock>& vec)
     return;
 }
 
-void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data)
-{
-    AutoLock lock(m_BufferLock);
-    data.clear();
-    preidx = this->bampEndIdx;
-    prest = this->bampEndOffset;
-    unsigned idx = preidx;
-    unsigned st = prest;
-    endidx = arrUnits.size() - 1;
-    endst = arrUnits[endidx].len;
-    assert(endidx >= idx);
-    while(idx < endidx){
-        assert(st <= arrUnits[idx].len);
-        unsigned len = arrUnits[idx].len - st;
-        if(len > 0){
-             data.push_back(arrUnits[idx]);   
-            data.back().offset = st;
-            data.back().len = len;
-        }
-        idx ++;
-        st = arrUnits[idx].offset;
-    }
-    assert(st <= endst);
-    if(st < endst){
-        unsigned len = endst - st;
-        data.push_back(arrUnits[idx]);
-        data.back().offset = st;
-        data.back().len = len;
-    }
-}
 unsigned ProjectBuffer::getDataLength()
 {
     AutoLock lock(m_BufferLock);
@@ -241,6 +213,49 @@ unsigned ProjectBuffer::getDataLength()
     }
     return 0;
 }
+
+void ProjectBuffer::getDataSegment(unsigned idx, unsigned offset, unsigned endIdx, unsigned endOffset, vector<DataBlock>& data)
+{
+    while(idx < endIdx){
+        assert(offset <= arrUnits[idx].len);
+        unsigned len = arrUnits[idx].len - offset;
+        if(len > 0){
+             data.push_back(arrUnits[idx]);   
+            data.back().offset = offset;
+            data.back().len = len;
+        }
+        idx ++;
+        offset = arrUnits[idx].offset;
+    }
+    assert(offset <= endOffset);
+    if(offset < endOffset){
+        unsigned len = endOffset- offset;
+        data.push_back(arrUnits[idx]);
+        data.back().offset = offset;
+        data.back().len = len;
+    }
+}
+void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit)
+{
+    AutoLock lock(m_BufferLock);
+    data.clear();
+    preidx = this->bampEndIdx;
+    prest = this->bampEndOffset;
+    endidx = arrUnits.size() - 1;
+    endst = arrUnits[endidx].len;
+    assert(endidx >= preidx);
+    unsigned idx = preidx;
+    unsigned st = prest;
+    getDataSegment(idx, st, endidx, endst, data);
+    bPreHit = this->bBampHit;
+}
+
+//NOTE: called in context being locked.
+/*
+bool ProjectBuffer::saveBampProject(unsigned idx, unsigned offset)
+{
+}
+*/
 
 ostream& operator<<(ostream& str, ProjectBuffer::ArrivalRecord rec)
 {
@@ -254,10 +269,20 @@ bool ProjectBuffer::relse(){
         return false;
     }
     if(bRelsed) return true;
+    bRelsed = true;
+    if(this->bBampHit && bampFp){
+        vector<DataBlock> remData;
+        unsigned idx = arrUnits.size() - 1;
+        getDataSegment(this->bampEndIdx, this->bampEndOffset, idx, arrUnits[idx].offset + arrUnits[idx].len, remData);
+        this->funcSaveData(bampFp, remData);
+        fclose(bampFp);
+    }
+    unsigned tolLen = 0;
     for(size_t idx=1; idx < arrUnits.size(); idx++){
+        tolLen += arrUnits[idx].len;
         BlockMana_relse(arrUnits[idx]);
     }
-    bRelsed = true;
+    LOGFMT_INFO(g_BufferLogger, "PID=%lu SIZE=%lu release ProjectBuffer.", this->ID, tolLen);
 
     if (zsummer::log4z::ILog4zManager::getPtr()->prePushLog(g_BufferLogger, LOG_LEVEL_DEBUG)){
         ostringstream oss;

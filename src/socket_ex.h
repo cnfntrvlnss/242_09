@@ -17,5 +17,6 @@ std::string addr2str(const struct sockaddr *addr);
 int initserver(int type, const struct sockaddr *addr, socklen_t alen, int qlen);
 
 std::string GetLocalIP();
+std::string GetLocalIPByIF(const char *eth);
 
 #endif
