@@ -247,6 +247,7 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
         segNum += allData[idx].tolLen / BAMPSEGMENTLEN;
         assert(allData[idx].tolLen % BAMPSEGMENTLEN == 0);
     }
+    BLOGT("bamp_match job num: %u", segNum);
     BAI_InputItem *intoEng = new BAI_InputItem[segNum];
     unsigned intoEngSize = 0;
     //vector<BAI_InputItem> intoEng;

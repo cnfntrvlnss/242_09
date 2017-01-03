@@ -58,7 +58,8 @@ std::map<unsigned long,ProjRecord_t> NewReportedID;
 pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
 
 //////////////////---bamp---
-static unsigned g_uBampFixedLen = 3.0 * PCM_ONESEC_LEN;
+//NOTE: only support 3 secs segment.
+static unsigned g_uBampFixedLen = 3 * PCM_ONESEC_LEN;
 
 
 /**
@@ -259,60 +260,52 @@ int SendData2DLL(WavDataUnit *p)
         LOG_WARN(g_logger, szHead<<"fail to receive data as ioacas being uninitialized.");
         return -1;
     }
+    assert(p->m_iDataLen == g_uBampFixedLen);
     clockoutput_start("SendData2DLL");
     ProjectSegment prj;
     prj.pid = p->m_iPCBID;
     prj.data = p->m_pData;
     prj.len = p->m_iDataLen;
-    recvProjSegment(prj, !g_bDiscardable);
+    recvProjSegment(prj, !g_bDiscardable, true);
     string output = clockoutput_end();
     LOGFMTT(output.c_str());
 
     return 0;
 }
 
-/*
-static char* getCopyUnBamp(ProjectBuffer *prj, unsigned &offset, unsigned &outlen)
+static bool saveWaveAsAlaw(FILE *fp, vector<DataBlock> &blks);
+static void appendDataToReportFile(BampMatchParam &par)
 {
-    offset = prj->getBampEndPos();
-    std::vector<DataBlock> storedData;
-    prj->getData(storedData);
-    unsigned totalLen = 0;
-    unsigned idx = 0;
-    char *buf1 = NULL;
-    unsigned len1 = 0;
-    for(; idx < storedData.size(); idx++){
-        DataBlock &curb = storedData[idx];
-        totalLen += curb.len;
-        if(totalLen > offset){
-            buf1 = curb.getPtr() + curb.len - totalLen + offset;
-            len1 = totalLen - offset;
-            break;
+    if(par.bPreHit){
+        char savedfile[MAX_PATH];
+        gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, par.curtime.tv_sec, par.pid, NULL, NULL, NULL);
+        char *stSufPtr = strrchr(savedfile, '.');
+        strcpy(stSufPtr+1, "pcm");
+        FILE *fp = fopen(savedfile, "a");
+        if(fp == NULL){
+            LOGFMT_ERROR(g_logger, "BampMatchThread failed to open file to append data. file: %s\n", savedfile);
+        }
+        else {
+             saveWaveAsAlaw(fp, par.data);   
         }
     }
-    if(idx == storedData.size()){
-        assert(totalLen == offset);
-        return NULL;
+    else if(par.bHit){
+        vector<DataBlock> prjData;
+        par.ptrBuf->getDataSegment(1, 0, par.endIdx, par.endOffset, prjData);
+        char savedfile[MAX_PATH];
+        gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, par.curtime.tv_sec, par.pid, NULL, NULL, NULL);
+        char *stSufPtr = strrchr(savedfile, '.');
+        strcpy(stSufPtr+1, "pcm");
+        FILE *fp = fopen(savedfile, "a");
+        if(fp == NULL){
+            LOGFMT_ERROR(g_logger, "BampMatchThread failed to open file to append data. file: %s\n", savedfile);
+        }
+        else {
+            if(prjData.size() > 0) saveWaveAsAlaw(fp, prjData);
+             saveWaveAsAlaw(fp, par.data);   
+        }
     }
-    for(unsigned i = idx+1; i < storedData.size(); i++){
-        totalLen += storedData[i].len;
-    }
-    outlen = totalLen - offset;
-    if(outlen < g_uBampFixedLen) return NULL;
-    char *ret = new char[outlen];
-    assert(ret != NULL);
-    unsigned curlen = 0;
-    memcpy(ret, buf1, len1);
-    curlen += len1;
-    for(unsigned i = idx+1; i < storedData.size(); i++){
-        memcpy(ret + curlen, storedData[i].getPtr(), storedData[i].len);
-        curlen += storedData[i].len;
-    }
-    assert(curlen == outlen);
-    return ret;
 }
-*/
-
 /***
  * keep doing bampMatch until projectBuffer is full.
  *
@@ -326,6 +319,7 @@ void * bampMatchThread(void *)
         exit(1);
     }
     LOGFMT_INFO(g_logger, "<%lx> start bampMatchThread...", pthread_self());
+    //discharged when it is full and has none of new data.
     while(true){
         clockoutput_start("one circle of bampMatch");
         sleep(1);
@@ -335,18 +329,20 @@ void * bampMatchThread(void *)
         allBufs.clear();
         while(true){
             if(allProjs.size() == 0) break;
-            //struct timeval curtime;
-            //gettimeofday(&curtime, NULL);
+            vector<unsigned long> unPrjs;
             for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end(); it++){
                 BampMatchParam tmpPar(it->second->ID, it->second);
-                it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data, tmpPar.bPreHit);
-		tmpPar.curtime = it->second->getPrjTime();
-                if(tmpPar.data.size() == 0) continue;
+                bool bPrjFull = false;
+                it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data, tmpPar.bPreHit,  bPrjFull, tmpPar.curtime);
+                if(tmpPar.data.size() == 0){
+                    if(bPrjFull) unPrjs.push_back(it->first);
+                    continue;
+                }
                 unsigned tolLen = 0;
                 for(unsigned idx=0; idx < tmpPar.data.size(); idx++){
                     tolLen += tmpPar.data[idx].len;
                 }
-                if(tolLen < g_uBampFixedLen) continue;
+                assert(tolLen % g_uBampFixedLen == 0);
                 tmpPar.preLen = tmpPar.data[0].getCap() * (tmpPar.preIdx - 1) + tmpPar.preOffset;
                 tmpPar.tolLen = 0;
                 for(size_t jdx=0; jdx < tmpPar.data.size(); jdx++){
@@ -354,16 +350,24 @@ void * bampMatchThread(void *)
                 }
                 allBufs.push_back(tmpPar);
             }
+            for(size_t idx=0; idx < unPrjs.size(); idx++){
+                returnBuffer(allProjs[unPrjs[idx]]);
+                allProjs.erase(unPrjs[idx]);
+            }
+
             if(allBufs.size() == 0) break;
-            LOGFMT_DEBUG(g_logger, "in BampMatchThread, job num: %u", allBufs.size());
+            LOGFMT_DEBUG(g_logger, "in BampMatchThread, project having new data num: %u", allBufs.size());
             obj->bamp_match(allBufs);
             for(size_t idx=0; idx < allBufs.size(); idx++){
                 BampMatchParam &par = allBufs[idx];
-                allProjs[par.pid]->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, par.data, par.bHit);
+                allProjs[par.pid]->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, par.bHit);
+                //append reported file here.
+                appendDataToReportFile(par);
             }
             break;
         }
 
+        /*
         for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end();){
             map<unsigned long, ProjectBuffer*>::iterator preit = it++;
             //ProjectBuffer* ptrbuf = preit->second;
@@ -372,6 +376,7 @@ void * bampMatchThread(void *)
                 allProjs.erase(preit);
             }
         }
+        */
         string output = clockoutput_end();
         LOGFMTT(output.c_str());
     }
@@ -519,13 +524,8 @@ void reportBampResultSeg(BampResultParam prm, ostream &oss)
 #if 1
     gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, curtime.tv_sec, prj.m_iPCBID, &type, &cfgId, &cfgScore);
     char * stSufPtr = strrchr(savedfile, '.');
-    sprintf(stSufPtr, "_%.2f_%.2f.pcm", pResult->m_fSegPosInPCB[0], pResult->m_fSegPosInTarget[0]);
-    //strcpy(stSufPtr+1, "pcm");
-    //char projSt[20];
-    //snprintf(projSt, 20, "_%.2f", pResult->m_fSegPosInPCB[0]);
-    //insertStrAt0(stSufPtr, projSt);
-    //if(!saveWaveAsAlaw(vecData, savedfile)){
-    if(!saveWaveAsAlaw(prj.m_pData, prj.m_iDataLen, savedfile)){
+    sprintf(stSufPtr, "_%.2f_%.2f.wav", pResult->m_fSegPosInPCB[0], pResult->m_fSegPosInTarget[0]);
+    if(!saveWave(prj.m_pData, prj.m_iDataLen, savedfile)){
         LOGFMT_ERROR(g_logger, "reportBampResultSeg failed to write bamp pointed wave segment to file %s.", savedfile);
     }
     else{
@@ -542,7 +542,6 @@ void reportBampResultSeg(BampResultParam prm, ostream &oss)
         }
         else{
             fwrite(g_sz256Zero, 256, 1, fp);
-            prm.ptrBuf->setBampFile(fp, saveWaveAsAlaw);
         }
     }
     snprintf(pResult->m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);

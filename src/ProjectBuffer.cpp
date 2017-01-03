@@ -77,75 +77,6 @@ static inline void BlockMana_relse(const DataBlock& blk)
     }
 }
 
-/*
-{
-    vector<DataUnit*> g_vecFreeBlocks; 
-    static set<DataUnit*> g_setUsedBlocks;
-    static unsigned g_uBlocksMax = 600;
-    static unsigned g_uBlocksMin = 300;
-    static LockHelper g_BlocksManaLocker;
-    DataUnit* myAlloc(){
-        DataUnit* ret = NULL;
-        
-        AutoLock lock(g_BlocksManaLocker);
-        if(g_setUsedBlocks.size() < g_uBlocksMax){
-            if(g_vecFreeBlocks.empty()){
-                ret = new DataUnit[BLOCKSIZE];
-                assert(ret != NULL);
-            }
-            else{
-                ret = g_vecFreeBlocks.back();
-                g_vecFreeBlocks.pop_back();
-            }
-            g_setUsedBlocks.insert(ret);
-        }
-
-        return ret;
-    }
-
-    void myFree(DataUnit* data){
-        if(data == NULL) return;
-        AutoLock lock(g_BlocksManaLocker);
-        if(g_setUsedBlocks.size() > g_uBlocksMin){
-            delete [] data;
-        }
-        else{
-            if(g_vecFreeBlocks.size() < g_uBlocksMin){
-                g_vecFreeBlocks.push_back(data);
-            }
-            else{
-                delete [] data;
-            }
-        }
-        if(g_setUsedBlocks.erase(data) != 1){
-            //data allocated somewhere other than alloc above.   
-            assert(false);
-        }
-    }
-
-    static LockHelper g_DataBlockLocker;//for use in multi-threaded environment.
-    void DataBlock::setData(const DataBlock& other)
-    {
-        AutoLock myLock(g_DataBlockLocker);
-        m_buf = other.m_buf;
-        m_len = other.m_len;
-        m_cnt = other.m_cnt;
-        if(m_cnt != NULL){
-            (*m_cnt)++;
-        }
-    }
-    void DataBlock::relse()
-    {
-        AutoLock myLock(g_DataBlockLocker);
-        if(m_buf != NULL){
-            (*m_cnt) --;
-            if(*m_cnt == 0){
-                myFree(static_cast<DataUnit*>(m_buf));
-                delete m_cnt;
-            }
-        }
-    }
-}*/
 struct timeval ZERO_TIMEVAL;
 static LoggerId g_BufferLogger = LOG4Z_MAIN_LOGGER_ID;
 ProjectBuffer::BufferConfig ProjectBuffer::bufferConfig;
@@ -175,9 +106,7 @@ void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
     this->ID = pid;
     this->bFull = false;
     this->bAlloc = true;
-    this->bBampHit = false;
-    this->bampFp = NULL;
-    this->funcSaveData = NULL;
+    this->bHasBamp = false;
     this->bRelsed = false;
     //this->uBampEnd = 0;
     this->bampEndIdx = 0;
@@ -214,7 +143,7 @@ unsigned ProjectBuffer::getDataLength()
     return 0;
 }
 
-void ProjectBuffer::getDataSegment(unsigned idx, unsigned offset, unsigned endIdx, unsigned endOffset, vector<DataBlock>& data)
+void ProjectBuffer::getDataSegmentIn(unsigned idx, unsigned offset, unsigned endIdx, unsigned endOffset, vector<DataBlock>& data)
 {
     while(idx < endIdx){
         assert(offset <= arrUnits[idx].len);
@@ -235,7 +164,8 @@ void ProjectBuffer::getDataSegment(unsigned idx, unsigned offset, unsigned endId
         data.back().len = len;
     }
 }
-void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit)
+
+void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit, bool& bfull, struct timeval &prjtime)
 {
     AutoLock lock(m_BufferLock);
     data.clear();
@@ -246,16 +176,12 @@ void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &e
     assert(endidx >= preidx);
     unsigned idx = preidx;
     unsigned st = prest;
-    getDataSegment(idx, st, endidx, endst, data);
+    getDataSegmentIn(idx, st, endidx, endst, data);
     bPreHit = this->bBampHit;
+    bfull = this->bFull;
+    prjtime.tv_sec = this->fullRecord.seconds;
+    prjtime.tv_usec = 0;
 }
-
-//NOTE: called in context being locked.
-/*
-bool ProjectBuffer::saveBampProject(unsigned idx, unsigned offset)
-{
-}
-*/
 
 ostream& operator<<(ostream& str, ProjectBuffer::ArrivalRecord rec)
 {
@@ -268,15 +194,23 @@ bool ProjectBuffer::relse(){
     if(mainRegEdTime.tv_sec == 0){
         return false;
     }
+    if(this->bHasBamp){
+        if(this->bampEndIdx == arrUnits.size() - 1 && this->bampEndOffset == arrUnits.back().len + arrUnits.back().offset){
+        }
+        else{
+            return false;
+        }
+    }
     if(bRelsed) return true;
     bRelsed = true;
+    /*
     if(this->bBampHit && bampFp){
         vector<DataBlock> remData;
         unsigned idx = arrUnits.size() - 1;
         getDataSegment(this->bampEndIdx, this->bampEndOffset, idx, arrUnits[idx].offset + arrUnits[idx].len, remData);
         this->funcSaveData(bampFp, remData);
         fclose(bampFp);
-    }
+    } */
     unsigned tolLen = 0;
     for(size_t idx=1; idx < arrUnits.size(); idx++){
         tolLen += arrUnits[idx].len;
@@ -441,7 +375,7 @@ void notifyProjFinish(unsigned long pid)
  *
  * return 1 if success, otherwise 0.
  */
-int recvProjSegment(ProjectSegment param, bool iswait)
+void recvProjSegment(ProjectSegment param, bool iswait, bool bBamp)
 {
     //LOGFMT_TRACE(g_BufferLogger, "PID=%llu receive new data, size=%u.", pid, len);
     unsigned long &pid = param.pid;
@@ -452,6 +386,7 @@ int recvProjSegment(ProjectSegment param, bool iswait)
     g_ProjsLocker.lock();
     if(g_mapProjs.find(pid) == g_mapProjs.end()){
         g_mapProjs[pid].prj = new ProjectBuffer(pid);
+        if(bBamp) g_mapProjs[pid].prj->setBamp();
         g_setPrevFullIDs.insert(pid);
         LOGFMT_DEBUG(g_BufferLogger, "PID=%lu arrives, %u projects in buffer.", pid, g_mapProjs.size());
     }
@@ -459,16 +394,13 @@ int recvProjSegment(ProjectSegment param, bool iswait)
     g_mapProjs[pid].cnt ++;
     g_ProjsLocker.unLock();
 
-    int ret = 0;   
     unsigned rlen = tmpPrj->recvData(data, dataLen);
     if(rlen == dataLen){
-        ret = 1;
     } 
     else{
         LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. Total: %u; Received: %u.", pid, dataLen, rlen);
     }
     returnBuffer(tmpPrj);
-    return ret;
 }
 
 static void transferIDs(time_t curTime)

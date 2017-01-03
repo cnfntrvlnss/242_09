@@ -91,18 +91,18 @@ public:
         return ret;
     }
 
-    /*
-    void getBampEndPos(unsigned &idx, unsigned &st){
+    void setBamp(){
         AutoLock lock(m_BufferLock);
-        idx = this->bampEndIdx;
-        st = this->bampEndOffset;
-    }*/
-    void setBampEndPos(unsigned preIdx, unsigned preSt, unsigned idx, unsigned st, std::vector<DataBlock>& data, bool bHit){
+        this->bHasBamp = true;
+    }
+    void setBampEndPos(unsigned preIdx, unsigned preSt, unsigned idx, unsigned st, bool bhit){
         AutoLock lock(m_BufferLock);
         assert(this->bampEndIdx == preIdx);
         assert(this->bampEndOffset == preSt);
         this->bampEndIdx = idx;
         this->bampEndOffset = st;
+        if(bhit) this->bBampHit = true;
+        /*
         if(this->bBampHit){
             if(this->bampFp) this->funcSaveData(bampFp, data);
         }
@@ -114,17 +114,21 @@ public:
             }
             this->bBampHit = true;
         }
+        */
     }
-    void getUnBampData(unsigned &idx, unsigned &st, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit);
+    
+    void getUnBampData(unsigned &idx, unsigned &st, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit, bool& bfull, struct timeval & prjtime);
     bool getBampHit(){
         AutoLock lock(m_BufferLock);
         return this->bBampHit;
     }
+    /*
     void setBampFile(FILE *fp, FuncSaveData addr){
         AutoLock lock(m_BufferLock);
         bampFp = fp;
         funcSaveData = addr;
     }
+    */
     void startMainReg(struct timeval curtime = ZERO_TIMEVAL){
         //if(memcmp(&curtime, &ZERO_TIMEVAL, sizeof(struct timeval) == 0)){
         if(curtime.tv_sec == ZERO_TIMEVAL.tv_sec && curtime.tv_usec == ZERO_TIMEVAL.tv_usec){
@@ -156,6 +160,11 @@ public:
     void init(){
         bAlloc = false;
     }
+    void getDataSegment(unsigned idx, unsigned offset, unsigned endIdx, unsigned endOffset, std::vector<DataBlock>& data)
+{
+    AutoLock lock(m_BufferLock);
+    getDataSegmentIn(idx, offset, endIdx, endOffset, data);
+}
 
 private:
     ProjectBuffer(const ProjectBuffer& );
@@ -168,7 +177,7 @@ private:
     }
 
     //bool saveBampProject(unsigned idx, unsigned offset);
-    void getDataSegment(unsigned idx0, unsigned offset0, unsigned idx1, unsigned offset1, std::vector<DataBlock>& data);
+    void getDataSegmentIn(unsigned idx0, unsigned offset0, unsigned idx1, unsigned offset1, std::vector<DataBlock>& data);
 public:
     struct BufferConfig{
         BufferConfig():
@@ -204,10 +213,11 @@ private:
     bool bAlloc;
     bool bFull;
     bool bBampHit;
+    bool bHasBamp;
     bool bRelsed;
     //unsigned uBampEnd;
-    FILE *bampFp;// should be closed in relse.
-    FuncSaveData funcSaveData;
+    //FILE *bampFp;// should be closed in relse.
+    //FuncSaveData funcSaveData;
     //std::string bampProjectPath;
     unsigned bampEndIdx;
     unsigned bampEndOffset;
@@ -239,7 +249,7 @@ struct ProjectSegment{
 bool init_bufferglobal(BufferConfig buffConfig);
 void rlse_bufferglobal();
 extern "C" void notifyProjFinish(unsigned long pid);
-int recvProjSegment(ProjectSegment param, bool iswait = false);
+void recvProjSegment(ProjectSegment param, bool iswait = false, bool bBamp = true);
 ProjectBuffer* obtainBuffer(unsigned long pid);
 void obtainAllBuffers(std::map<unsigned long, ProjectBuffer*>& allBufs);
 ProjectBuffer* obtainFullBufferTimeout(unsigned secs = -1);
