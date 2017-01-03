@@ -1,6 +1,7 @@
-#include "porting.h"
 #include "commonFunc.h"
+#include "porting.h"
 
+#include <time.h>
 
 zsummer::log4z::ILog4zManager* initLog4z()
 {
@@ -215,13 +216,15 @@ std::string saveProjectSegment(struct timeval curtime, unsigned long pid, unsign
     return filePath;
 }
 
-static std::map<pthread_t, std::vector<std::pair<unsigned, std::string> > > allClockStack;
+static std::map<pthread_t, std::vector<std::pair<struct timespec, std::string> > > allClockStack;
 LockHelper clockoutput_lock;
 void clockoutput_start(const char *fmt, ...)
 {
     clockoutput_lock.lock();
-    std::vector<std::pair<unsigned, std::string> > & cur = allClockStack[pthread_self()];
-    cur.push_back(std::make_pair(clock(), ""));
+    std::vector<std::pair<struct timespec, std::string> > & cur = allClockStack[pthread_self()];
+    struct timespec tmptm;
+    clock_gettime(CLOCK_REALTIME, &tmptm);
+    cur.push_back(std::make_pair(tmptm, ""));
     va_list args;
     va_start(args, fmt);
     cur[cur.size() -1].second.resize(100);
@@ -233,10 +236,13 @@ void clockoutput_start(const char *fmt, ...)
 std::string clockoutput_end()
 {
     AutoLock myLock(clockoutput_lock);
-    std::vector<std::pair<unsigned, std::string> > & cur = allClockStack[pthread_self()];
-    unsigned lastclock = cur[cur.size() -1].first;
+    std::vector<std::pair<struct timespec, std::string> > & cur = allClockStack[pthread_self()];
+    struct timespec lastclock = cur[cur.size() -1].first;
     ostringstream oss;
-    oss<< cur[cur.size() - 1].second << " ElapseClock "<< clock() - lastclock;
+    struct timespec tmptm;
+    clock_gettime(CLOCK_REALTIME, &tmptm);
+    unsigned long elsus = (tmptm.tv_sec - lastclock.tv_sec) * 1000000 + (tmptm.tv_nsec - lastclock.tv_nsec) / 1000;
+    oss<< cur[cur.size() - 1].second << " ElapseClock "<< elsus;
     cur.pop_back();
     return oss.str();
 }

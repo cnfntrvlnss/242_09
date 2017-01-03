@@ -291,7 +291,7 @@ void *sendProjectProcess(void *param)
             if(bulksize % 2 != 0){
                 fprintf(stderr, "the length of data is odd, skiplen: %d, headlen: %ld, datalen: %ld, file %s.\n", skipLen, headlen, ptask->dataLen, ptask->filePath);
             }
-			if(bulksize > 0){
+			if(bulksize == PACKETBYTES){
                 WavDataUnit dataUnit;
                 dataUnit.m_iPCBID = ptask->id;
                 dataUnit.m_iDataLen = bulksize;
@@ -309,6 +309,10 @@ void *sendProjectProcess(void *param)
                 tv.tv_usec = (g_fWaitSecs - tv.tv_sec) * 1000000;
                 select(0, NULL, NULL, NULL, &tv);
 			}
+            else if(bulksize > 0){
+                fprintf(stderr, "WARN the last packet is of the size less than %d, and is discarded.\n", PACKETBYTES);
+            }
+
 			if(ifs.fail() && !ifs.eof()){
 				//LOGFMTE("error: %s; file %s\n", strerror(errno), ptask->filePath);
 				printf("error: %s; file %s\n", strerror(errno), ptask->filePath);

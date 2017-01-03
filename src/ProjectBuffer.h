@@ -86,7 +86,7 @@ public:
     struct timeval getPrjTime(){
         AutoLock lock(m_BufferLock);
         struct timeval ret;
-        ret.tv_sec = arrArrivalRecords[0].seconds;
+        ret.tv_sec = fullRecord.seconds;
         ret.tv_usec = 0;
         return ret;
     }
@@ -164,8 +164,7 @@ private:
     {
         assert(!bFull);
         bFull = true;
-        fullUnitIdx = arrArrivalRecords.back().unitIdx;
-        fullOffset = arrArrivalRecords.back().offset;
+        fullRecord = lastRecord;
     }
 
     //bool saveBampProject(unsigned idx, unsigned offset);
@@ -198,7 +197,10 @@ private:
     friend std::ostream& operator<<(std::ostream&, ArrivalRecord);
     LockHelper m_BufferLock;
     std::vector<DataBlock> arrUnits;
-    std::vector<ArrivalRecord> arrArrivalRecords;
+    //std::vector<ArrivalRecord> arrArrivalRecords;
+    ArrivalRecord fullRecord;
+    ArrivalRecord lastRecord;
+    time_t prjTime;
     bool bAlloc;
     bool bFull;
     bool bBampHit;

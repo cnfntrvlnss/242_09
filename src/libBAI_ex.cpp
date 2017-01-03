@@ -130,6 +130,7 @@ bool BampMatchObject::loadModel(const char *libFile)
 /**
  * the memory pointed by pData is freed inside function.
  */
+ /*
 bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
 {
     AutoLock mylock(this->lock);
@@ -183,7 +184,7 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
 	oss.str("");
         oss<< "PID=" << pid<< " "<< "WaveLen="<< (len) / 16000<< " Offset="<< preLen / 16000<< " ";
         if(pRes[idx].iResultNum == 0){
-            BLOGI("%sbamp_match no result after BAI_Retrieval... err: %d", oss.str().c_str(), pRes[idx].eErrCode);
+            BLOGT("%sbamp_match no result after BAI_Retrieval... err: %d", oss.str().c_str(), pRes[idx].eErrCode);
             continue;
         }
         long stpos = oss.tellp();
@@ -222,7 +223,152 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
     delete [] pRes;
     return true;
 }
+*/
 
+struct EngInputCompanyParam{
+    EngInputCompanyParam(unsigned idx, unsigned segidx, unsigned unitidx, unsigned offset):
+    idx(idx), segidx(segidx), unitidx(unitidx), offset(offset)
+    {}
+    unsigned idx;
+    unsigned segidx;
+    unsigned unitidx;
+    unsigned offset;
+};
+#define BAMPSEGMENTLEN 48000
+bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
+{
+    AutoLock mylock(this->lock);
+    if(!this->bHasModel){
+        BLOGT("in bamp_match no library to use.");
+        return false;
+    }
+    unsigned segNum = 0;
+    for(size_t idx=0; idx < allData.size(); idx++){
+        segNum += allData[idx].tolLen / BAMPSEGMENTLEN;
+        assert(allData[idx].tolLen % BAMPSEGMENTLEN == 0);
+    }
+    BAI_InputItem *intoEng = new BAI_InputItem[segNum];
+    unsigned intoEngSize = 0;
+    //vector<BAI_InputItem> intoEng;
+    vector<EngInputCompanyParam> dataidxarr;
+    unsigned segidx = 0;
+    for(size_t idx=0; idx < allData.size(); idx++){
+        BampMatchParam &curPrm = allData[idx];
+        const vector<DataBlock>& curData = curPrm.data;
+        unsigned unitidx = 0;
+        unsigned offset = curData[unitidx].offset;
+
+        while(true){
+            if(unitidx == curData.size() - 1 && offset == curData[unitidx].len + curData[unitidx].offset){
+                break;
+            }
+            if(offset == curData[unitidx].len + curData[unitidx].offset){
+                unitidx = unitidx + 1;
+                offset = curData[unitidx].offset;
+            }
+
+            if(curData[unitidx].len + curData[unitidx].offset - offset >= BAMPSEGMENTLEN){
+                assert(intoEngSize < segNum);
+                BAI_InputItem &curItem = intoEng[intoEngSize];
+                curItem.iAudioID = intoEngSize;
+                //sprintf(curItem.acAudioUrl, "\0");
+                curItem.acAudioUrl[0] = '\0';
+                curItem.pcDataBuffer = new char[BAMPSEGMENTLEN];
+                memcpy(curItem.pcDataBuffer, curData[unitidx].getPtr() + offset, BAMPSEGMENTLEN);
+                curItem.iBufferSize = BAMPSEGMENTLEN;
+                curItem.iDataType = 0;
+                intoEngSize ++;
+                dataidxarr.push_back(EngInputCompanyParam(idx, segidx, unitidx, offset));
+                unsigned realPreLen = curPrm.preLen + segidx * BAMPSEGMENTLEN;
+                BLOGT("saved audio segment before bamp match call, file: %s.", saveProjectSegment(curPrm.curtime, curPrm.pid, &realPreLen,  intoEng[intoEngSize - 1].pcDataBuffer, intoEng[intoEngSize - 1].iBufferSize).c_str());
+                offset += BAMPSEGMENTLEN;
+                segidx ++;
+            }
+            else{
+                assert(curData[unitidx].len + curData[unitidx].offset - offset == 0);
+            }
+        }
+    }
+
+    assert(intoEngSize  == dataidxarr.size());
+    BAI_ResultList *pRes = NULL;
+    BAI_Code err = BAI_Retrieval_Partly_VAD(intoEng, intoEngSize, pRes, &(this->hdl));
+    if(err != BAI_OK){
+        BLOGE("in bamp_match failed to call BAI_Retrieval_Partly, err: %d.", err);
+        delete [] intoEng;
+        return false;
+    }
+
+    CDLLResult desres;
+    WavDataUnit desdata;
+    desres.m_iDataUnitNum = 1;
+    desres.m_pDataUnit[0] = &desdata;
+    if(pRes == NULL){
+        BLOGE("in bamp_match, no result after BAI_Retrieval.. pRes == NULL.");
+        delete [] intoEng;
+        return false;
+    }
+    ostringstream oss;
+    for(size_t idx=0; idx < intoEngSize; idx++){
+        unsigned iTestID = pRes[idx].iTestID;
+        unsigned dataIdx = dataidxarr[iTestID].idx;
+        unsigned segIdxInData = dataidxarr[iTestID].segidx;
+        unsigned unitidxInData = dataidxarr[iTestID].unitidx;
+        unsigned offsetInData = dataidxarr[iTestID].offset;
+        unsigned long pid = allData[dataIdx].pid;
+        unsigned len = BAMPSEGMENTLEN;
+        unsigned preLen = allData[dataIdx].preLen + segIdxInData * BAMPSEGMENTLEN;
+        struct timeval curtime = allData[dataIdx].curtime;
+        desdata.m_iPCBID = pid;
+        desdata.m_iDataLen = BAMPSEGMENTLEN;
+        desdata.m_pData = allData[dataIdx].data[unitidxInData].getPtr() + offsetInData;
+        oss.str("");
+        oss<< "PID=" << pid<< " "<< "WaveLen="<< (len) / 16000<< " Offset="<< preLen / 16000<< " ";
+        if(pRes[idx].iResultNum == 0){
+            BLOGT("%sbamp_match no result after BAI_Retrieval... err: %d", oss.str().c_str(), pRes[idx].eErrCode);
+            continue;
+        }
+        long stpos = oss.tellp();
+        for(size_t jdx=0; jdx < pRes[idx].iResultNum; jdx ++){
+            oss.seekp(stpos);
+            BAI_ResultItem& curhit = pRes[idx].pstResultItems[jdx];
+            if(curhit.fMatchedRate < 1.0001){
+                curhit.fMatchedRate *= 100;
+            }
+            if(curhit.fMatchedRate < g_fReportBampThrd){
+                continue;
+            }
+            oss<< " CfgName="<< curhit.acAudioUrl;
+            sscanf(curhit.acAudioUrl, "%u", &desres.m_iTargetID);
+            if(desres.m_iTargetID % 2){
+                desres.m_iAlarmType = g_uBampJCServType;
+            }
+            else{
+                desres.m_iAlarmType = g_uBampFDServType;
+            }
+            desres.m_iTargetID /= 2;
+            desres.m_iHarmLevel = 0;
+            desres.m_fTargetMatchLen = curhit.fDurationS;
+            desres.m_fLikely = curhit.fMatchedRate;
+            desres.m_fSegLikely[0] = curhit.fMatchedRate;
+            desres.m_fSegPosInPCB[0] = ((float)preLen) / 16000 + curhit.fTimeStartInTestS;
+            desres.m_fSegPosInTarget[0] = curhit.fTimeStartInWaveS;
+            BampResultParam resPrm;
+            resPrm.pResult = &desres;
+            resPrm.curtime =  curtime;
+            resPrm.bPreHit = allData[dataIdx].bPreHit;
+            resPrm.ptrBuf = allData[dataIdx].ptrBuf;
+            funcBampSubmitResult(resPrm, oss);
+            allData[dataIdx].bHit = true;
+            oss.put('\0');
+            BLOGI("%s", oss.str().c_str());
+        }
+    }
+
+    delete [] intoEng;
+    delete [] pRes;
+    return true;
+}
 /*
 bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime)
 {
