@@ -185,6 +185,8 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(myBufCfg.waitSecondsStep)
             LOG4Z_VAR(myBufCfg.waitSeconds)
             LOG4Z_VAR(myBufCfg.waitLength )
+            LOG4Z_VAR(myBufCfg.m_uBlocksMin)
+            LOG4Z_VAR(myBufCfg.m_uBlocksMax)
             );
 }
 
@@ -287,6 +289,7 @@ static void appendDataToReportFile(BampMatchParam &par)
         }
         else {
              saveWaveAsAlaw(fp, par.data);   
+	     fclose(fp);
         }
     }
     else if(par.bHit){
@@ -303,6 +306,7 @@ static void appendDataToReportFile(BampMatchParam &par)
         else {
             if(prjData.size() > 0) saveWaveAsAlaw(fp, prjData);
              saveWaveAsAlaw(fp, par.data);   
+	     fclose(fp);
         }
     }
 }
@@ -542,6 +546,7 @@ void reportBampResultSeg(BampResultParam prm, ostream &oss)
         }
         else{
             fwrite(g_sz256Zero, 256, 1, fp);
+            fclose(fp);
         }
     }
     snprintf(pResult->m_strInfo, 1024, "%s:%s", g_strIp.c_str(), savedfile);

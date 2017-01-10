@@ -581,10 +581,10 @@ int main(int argc, char* argv[])
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     while(true){
-       // if(funcIsAllFinished()){
-       //     cout<< "checked all tasks finishing in BufferGlobal.\n";
-       //      break;   
-       // }
+        if(funcIsAllFinished()){
+            cout<< "checked all tasks finishing in BufferGlobal.\n";
+             break;   
+        }
         tv.tv_sec = 5;
         select(0, NULL, NULL, NULL, &tv);
     }

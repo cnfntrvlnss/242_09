@@ -157,14 +157,14 @@ int GetDLLVersion(char *p, int &length)
 
 static void initGlobal(BufferConfig &myBufCfg)
 {
-	char szLangReports[256] = "14 0x20,";
-    char szLangReportFilter[256] = "0x20 99,";
+	string langReports = "14 0x20,";
+    string langReportFilter = "0x20 99,";
 
     Config_getValue(&g_AutoCfg, "", "eth4ReportIP", g_szEth4ReportIP);
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
-    Config_getValue(&g_AutoCfg, "lid", "languageReports", szLangReports);
-    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", szLangReportFilter);
+    Config_getValue(&g_AutoCfg, "lid", "languageReports", langReports);
+    Config_getValue(&g_AutoCfg, "lid", "langReportFilter", langReportFilter);
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
@@ -176,8 +176,8 @@ static void initGlobal(BufferConfig &myBufCfg)
     myBufCfg.waitLength *= 16000;
 	
     if(strlen(g_szEth4ReportIP) > 0) g_strIp = GetLocalIPByIF(g_szEth4ReportIP);
-	g_mLangReports = parseLangReportsFromStr(szLangReports);
-    parseReportFilter(szLangReportFilter, g_mLangReportFilter);
+	g_mLangReports = parseLangReportsFromStr(langReports.c_str());
+    parseReportFilter(langReportFilter.c_str(), g_mLangReportFilter);
 	unsigned tmpLen = strlen(m_TSI_SaveTopDir);
 	if(m_TSI_SaveTopDir[tmpLen - 1] != '/'){
 		m_TSI_SaveTopDir[tmpLen] = '/';
@@ -272,7 +272,7 @@ int SendData2DLL(WavDataUnit *p)
     pseg.pid = p->m_iPCBID;
     pseg.data = p->m_pData;
     pseg.len = p->m_iDataLen;
-    recvProjSegment(pseg, !g_bDiscardable);
+    recvProjSegment(pseg, !g_bDiscardable, false);
     LOG_TRACE(g_logger, szHead<< "have put data to GlobalBuffer.");
     return 0;
 }

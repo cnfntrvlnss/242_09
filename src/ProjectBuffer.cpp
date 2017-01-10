@@ -107,10 +107,11 @@ void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
     this->bFull = false;
     this->bAlloc = true;
     this->bHasBamp = false;
+    this->bBampHit = false;
     this->bRelsed = false;
     //this->uBampEnd = 0;
     this->bampEndIdx = 0;
-    this->bampEndOffset = 960000;
+    this->bampEndOffset = BLOCKSIZE;
     this->mainRegStTime.tv_sec = 0;
     this->mainRegStTime.tv_usec = 0;
     this->mainRegEdTime.tv_sec = 0;
