@@ -190,17 +190,18 @@ void spkex_rlse()
 }
 
 /**
- *
- * TODO after return, the object pointed by spk can be deleted at any time.
+ * 
+ * return 0 if no speaker exist, 1 no error occur, -1 failed in engine.
  */
-bool spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score)
+int spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score)
 {
     SLockHelper mylock(&g_SpkInfoRwlock, false);
     assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
     spk = NULL;
     score = -1000.0;
     if(g_vecSpeakerModel.size() == 0){
-        return true;
+        
+        return 0;
     }
     vector<float> vecScores;
     vecScores.resize(g_vecSpkInfoPtr.size());
@@ -210,7 +211,7 @@ bool spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &sc
     TITStatus err = TIT_SPKID_VERIFY_CLUSTER(pcmData, smpNum, const_cast<const void **>(&g_vecSpeakerModel[0]), g_vecSpeakerModel.size(), &vecScores[0]);
     if(err != StsNoError){
         SLOGE_FMT("in processSpkRec, failed in spk engine. error: %d.", err);
-        return false;
+        return -1;
     }
     size_t tIdx = 0;
     for(size_t idx=0; idx < vecScores.size(); idx++){
@@ -222,6 +223,6 @@ bool spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &sc
     if(score >= defaultSpkScoreThrd){
         spk = g_vecSpkInfoPtr[tIdx];
     }
-    return true;
+    return 1;
 }
 

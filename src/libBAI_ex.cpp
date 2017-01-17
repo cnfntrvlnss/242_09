@@ -252,13 +252,13 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
     unsigned intoEngSize = 0;
     //vector<BAI_InputItem> intoEng;
     vector<EngInputCompanyParam> dataidxarr;
-    unsigned segidx = 0;
     for(size_t idx=0; idx < allData.size(); idx++){
         BampMatchParam &curPrm = allData[idx];
         const vector<DataBlock>& curData = curPrm.data;
         unsigned unitidx = 0;
         unsigned offset = curData[unitidx].offset;
 
+        unsigned segidx = 0;
         while(true){
             if(unitidx == curData.size() - 1 && offset == curData[unitidx].len + curData[unitidx].offset){
                 break;

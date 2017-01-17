@@ -80,6 +80,7 @@ static char szLIDCfgDir[MAX_PATH] = "./ioacas/sysdir";
 void* IoaRegThread(void *param);
 
 ///////////////////---spk---
+static char szSpkMscCfg[MAX_PATH] = "./ioacas/Music.cfg";
 static char szSpkVADCfg[MAX_PATH] = "./ioacas/VAD_SID.cfg";
 static char szSpkCfgFile[MAX_PATH] = "./ioacas/runSpk.cfg";
 bool g_bUseSpk = true;
@@ -88,7 +89,7 @@ static bool g_bSpkUseMCut = true;
 extern float defaultSpkScoreThrd;
 static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
 
-static inline void checkAllPendingSpks()
+static void checkAllPendingSpks()
 {
     while(g_PendingDeleteSpks.size() > 0){
         map<pthread_t, unsigned long>& spkSnap = g_PendingDeleteSpks.front().second;
@@ -109,6 +110,7 @@ static inline void checkAllPendingSpks()
         }
     }
 }
+
 void delayrm_spkObj(const SpkInfoChd *spk)
 {
     checkAllPendingSpks();
@@ -128,12 +130,11 @@ typedef struct{
 	float  m_100Value;
 	float m_maxValue;// in term of original score.
 } ScoreConfig;
-static ScoreConfig spkScoreCfg;
-typedef int (*TransScore)(float);
+typedef float (*TransScore)(float);
 
 static ScoreConfig g_cfg;
 static char g_SCinit = 0;
-static int trans_score(float f)
+static float trans_score(float f)
 {
 	if(f > g_cfg.m_maxValue) f = g_cfg.m_maxValue;
 	return (f - g_cfg.m_0Value) * ((100) / (g_cfg.m_100Value - g_cfg.m_0Value));
@@ -148,6 +149,7 @@ TransScore getScoreFunc(ScoreConfig *param)
 	else if(param != NULL){
 		g_SCinit = 1;
 		g_cfg = *param;
+        g_cfg.m_maxValue = g_cfg.m_100Value;
 	}
 	return trans_score;
 }
@@ -213,8 +215,9 @@ void ioareg_maintain_procedure(time_t curTime)
 }
 bool ioareg_init()
 {
-	spkScoreCfg.m_0Value = 0;
-	spkScoreCfg.m_100Value = 100;
+	ScoreConfig ssCfg;
+    ssCfg.m_0Value = 0;
+	ssCfg.m_100Value = 100;
     Config_getValue(&g_AutoCfg, "", "saveAllTopDir", g_szAllPrjsDir);
     Config_getValue(&g_AutoCfg, "", "saveDebugTopDir", g_szDebugBinaryDir);
     Config_getValue(&g_AutoCfg, "", "ifUseVAD", g_bUseVAD);
@@ -226,8 +229,8 @@ bool ioareg_init()
     Config_getValue(&g_AutoCfg, "spk", "ifUseSPK", g_bUseSpk);
     Config_getValue(&g_AutoCfg, "spk", "ifUseVAD", g_bSpkUseVad);
     Config_getValue(&g_AutoCfg, "spk", "ifUseMusicDetect", g_bSpkUseMCut);
-    Config_getValue(&g_AutoCfg, "spk", "zeroScore", spkScoreCfg.m_0Value);
-    Config_getValue(&g_AutoCfg, "spk", "hundredScore", spkScoreCfg.m_100Value);
+    Config_getValue(&g_AutoCfg, "spk", "zeroScore", ssCfg.m_0Value);
+    Config_getValue(&g_AutoCfg, "spk", "hundredScore", ssCfg.m_100Value);
     Config_getValue(&g_AutoCfg, "spk", "defaultThreshold", defaultSpkScoreThrd);
     unsigned tmpLen = strlen(g_szAllPrjsDir);
 	if(tmpLen > 0 && g_szAllPrjsDir[tmpLen - 1] != '/'){
@@ -235,9 +238,10 @@ bool ioareg_init()
 		g_szAllPrjsDir[tmpLen + 1] = '\0';
 	}
 
-
 #define LOG4Z_VAR(x) << #x "=" << x << "\n"
     LOG_INFO(g_logger, "====================config====================\n" 
+            LOG4Z_VAR(g_szAllPrjsDir)
+            LOG4Z_VAR(g_szDebugBinaryDir)
             LOG4Z_VAR(g_ThreadNum)
             LOG4Z_VAR(g_bUseVAD)
             LOG4Z_VAR(g_bUseLid)
@@ -250,8 +254,8 @@ bool ioareg_init()
             LOG4Z_VAR(g_bSpkUseMCut)
             LOG4Z_VAR(g_iMusicPrecent)
             LOG4Z_VAR(defaultSpkScoreThrd)
-            LOG4Z_VAR(spkScoreCfg.m_0Value)
-            LOG4Z_VAR(spkScoreCfg.m_100Value)
+            LOG4Z_VAR(ssCfg.m_0Value)
+            LOG4Z_VAR(ssCfg.m_100Value)
             );
 
     int err = pthread_key_create(&g_RecWavBufsKey, free);
@@ -268,7 +272,7 @@ bool ioareg_init()
         else{
             LOG_INFO(g_logger, "finish initializing spk engine.");
         }
-        getScoreFunc(&spkScoreCfg);
+        getScoreFunc(&ssCfg);
     }
     if(g_bSpkUseVad){
         if(!InitVADCluster(szSpkVADCfg)){
@@ -277,6 +281,12 @@ bool ioareg_init()
         }
         LOG_INFO(g_logger, "finish initializing vad cluster engine.");
     }
+if(g_bSpkUseMCut){
+	if(!MusicCut_Initial(szSpkMscCfg, g_ThreadNum)){
+	LOG_ERROR(g_logger, "fail to initail music engine.");
+	return false;
+	}
+}
 
     initLID(g_ThreadNum);
 	//g_pthread_id = (pthread_t *)malloc(sizeof(pthread_t) * (g_ThreadNum));
@@ -296,6 +306,13 @@ bool ioareg_init()
 		}
 		pthread_attr_destroy(&threadAttr);
 	}
+
+string g_strExtraSpkModelDir = "ioacas/OrigSpkModel";
+if(if_directory_exists(g_strExtraSpkModelDir.c_str())){
+	int retspkcfg = procFilesInDir(g_strExtraSpkModelDir.c_str(), addSpkPerFile);
+	LOGFMT_INFO(g_logger, "in ioareg_init, loading prepared spk models in %s, SPKCount=%d.", g_strExtraSpkModelDir.c_str(), retspkcfg);
+}
+
     return true;
 }
 
@@ -311,6 +328,7 @@ bool ioareg_rlse()
 
     if(g_bUseSpk) spkex_rlse();
     if(g_bSpkUseVad) FreeVADCluster();
+    if(g_bSpkUseMCut) MusicCut_Free();
 
     delete []g_RecSpaceArr;
     g_RecSpaceArr = NULL;
@@ -435,6 +453,9 @@ static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
 	char WriteLog[1024];
     logLen = 0;
     logLen += sprintf(WriteLog+logLen, "LIDREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
+    //clockoutput_start("LIDREG TIME CONSUMING ");
+    clockoutput_start("CLOCK_RECORD %s", WriteLog);
+string timelid;
     while(true){
         short *recBuf = reinterpret_cast<short*>(pData);
         unsigned recBufLen = dataLen / sizeof(short);
@@ -511,13 +532,16 @@ static void lidRegProcess(RecogThreadSpace &rec, int hTLI)
         */
         int nMax;
         float score;
-        LOG_TRACE(g_logger, "LIDREG before spkex_score, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
+        LOG_TRACE(g_logger, "LIDREG before scoreTLI, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
+clockoutput_start("ScoreLID %u", recBufLen);
         scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
+timelid = clockoutput_end();
         if(checkAndSetLidResSt(rec.result, nMax, score)){
             reportIoacasResult(rec.result, WriteLog, logLen);
         }
         break;
     }
+    LOGFMTT("%s %s", clockoutput_end().c_str(), timelid.c_str());
     LOG_INFO(g_logger, WriteLog<< "eop.");
 }
 
@@ -528,9 +552,11 @@ static void spkRegProcess(RecogThreadSpace &rec)
     unsigned long &pid = rec.projData.m_iPCBID;
 	unsigned logLen = 0;
 #define MAX_LINE 1024
-	char WriteLog[1024];
+	char WriteLog[MAX_LINE];
     logLen = 0;
-    logLen += snprintf(WriteLog+logLen, MAX_LINE - logLen,  "SPKREG PID=%lu WavLen=%us ", pid, dataLen / PCM_ONESEC_LEN);
+    logLen += snprintf(WriteLog+logLen, MAX_LINE - logLen,  "<%lu> SPKREG PID=%lu WavLen=%us ", pthread_self(), pid, dataLen / PCM_ONESEC_LEN);
+    clockoutput_start("CLOCK_RECORD %s", WriteLog);
+string timemusic, timevad, timespk;
     while(true){
         short *recBuf = reinterpret_cast<short*>(pData);
         unsigned recBufLen = dataLen / sizeof(short);
@@ -543,7 +569,9 @@ static void spkRegProcess(RecogThreadSpace &rec)
         }
         if(g_bSpkUseMCut){
             int tmpval = recBufLen;
+            clockoutput_start("CutMusic %u", recBufLen);
             bool retmc = MusicCut(rec.threadIdx, recBuf, recBufLen, rec.mcutBuf, tmpval);
+timemusic = clockoutput_end();
             rec.mcutBufLen = tmpval;
             if(!retmc){ rec.mcutBufLen = 0; }
             recBuf = rec.mcutBuf;
@@ -557,7 +585,9 @@ static void spkRegProcess(RecogThreadSpace &rec)
         }
         if(g_bSpkUseVad){
             int tmpval = recBufLen;
+clockoutput_start("CutVAD %u", recBufLen);
             bool retvad = VADBuffer(true, recBuf, recBufLen, rec.vadBuf, tmpval);
+timevad = clockoutput_end();
             rec.vadBufLen = tmpval;
             if(!retvad) rec.vadBuf = 0;
             recBuf = rec.vadBuf;
@@ -572,8 +602,13 @@ static void spkRegProcess(RecogThreadSpace &rec)
         const SpkInfo *spk;
         float score;
         LOG_TRACE(g_logger, "SPKREG before spkex_score, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
-        spkex_score(recBuf, recBufLen, spk, score);
-        if(spk == NULL) break;
+clockoutput_start("ScoreSpk %u", recBufLen);
+        int retspk = spkex_score(recBuf, recBufLen, spk, score);
+timespk = clockoutput_end();
+        if(spk == NULL){
+            if(retspk == 0) logLen += snprintf(WriteLog + logLen, MAX_LINE - logLen, "no speaker sample ");
+             break;
+        }
         const SpkInfoChd *rspk = dynamic_cast<const SpkInfoChd*>(spk);
         CDLLResult &res = rec.result;
         res.m_iAlarmType = rspk->servType;
@@ -585,6 +620,7 @@ static void spkRegProcess(RecogThreadSpace &rec)
 
         break;
     }
+    LOGFMTT("%s %s %s %s", clockoutput_end().c_str(), timemusic.c_str(),timevad.c_str(), timespk.c_str());
     LOG_INFO(g_logger, WriteLog<< "eop.");
 }
 

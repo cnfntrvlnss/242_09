@@ -94,5 +94,5 @@ TITStatus TIT_SPKID_LOAD_MDL_IVEC(void *&mdl,const char *const modelpath)
 TITStatus TIT_SPKID_SAVE_MDL_IVEC(const void *const Ivec,const char *const modelpath)
 {
     OUTPUT_FORK(tit_spkid_saved_mdl_ivec);
-    return StsErrModel;
+    return StsNoError;
 }

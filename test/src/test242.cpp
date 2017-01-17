@@ -61,9 +61,18 @@ FuncRemoveAllCfg funcRemoveAllCfg;
 FuncNotifyProjFinish funcNotifyProjFinish;
 FuncIsAllFinished funcIsAllFinished;
 #define MAX_PATH 512
-#ifndef PACKETBYTES 
-#define PACKETBYTES 320000
+#define QUATEMACRO(x) #x
+unsigned getPackBytesByCompl(){
+    unsigned ret = 320000;
+#ifdef TESTDIR
+    if(strncmp(QUATEMACRO(TESTDIR), "../testZP", 9) == 0){
+        ret = 48000;
+    }
 #endif
+    return ret;
+}
+
+unsigned g_packetBytes=getPackBytesByCompl();
 bool g_bSingleProjectMode = false;
 //namespace zen4audio{
 //    void notifyProjFinish(unsigned long);
@@ -242,7 +251,7 @@ void *sendProjectProcess(void *param)
 {
 	pthread_t curpid = pthread_self();
     unsigned count = 0;
-	char *databuf = (char*)malloc(PACKETBYTES);
+	char *databuf = (char*)malloc(g_packetBytes);
     while(true){
         pthread_mutex_lock(&sendCSLocker);
         ProjInfo *ptask = g_iterProjInfo.next();
@@ -286,12 +295,12 @@ void *sendProjectProcess(void *param)
 
 		while(true)
 		{
-            ifs.read(databuf, PACKETBYTES);
+            ifs.read(databuf, g_packetBytes);
 			int bulksize = ifs.gcount();
             if(bulksize % 2 != 0){
                 fprintf(stderr, "the length of data is odd, skiplen: %d, headlen: %ld, datalen: %ld, file %s.\n", skipLen, headlen, ptask->dataLen, ptask->filePath);
             }
-			if(bulksize == PACKETBYTES){
+			if(g_packetBytes == 48000 && bulksize == g_packetBytes || bulksize > 0){
                 WavDataUnit dataUnit;
                 dataUnit.m_iPCBID = ptask->id;
                 dataUnit.m_iDataLen = bulksize;
@@ -310,7 +319,7 @@ void *sendProjectProcess(void *param)
                 select(0, NULL, NULL, NULL, &tv);
 			}
             else if(bulksize > 0){
-                fprintf(stderr, "WARN the last packet is of the size less than %d, and is discarded.\n", PACKETBYTES);
+                fprintf(stderr, "WARN the last packet is of the size less than %d, and is discarded.\n", g_packetBytes);
             }
 
 			if(ifs.fail() && !ifs.eof()){

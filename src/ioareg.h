@@ -60,6 +60,7 @@ public:
 };
 
 void delayrm_spkObj(const SpkInfoChd *spk);
+bool addSpkPerFile(const char* szDir, const char* filename);
 //bool checkSpkName(const char *name);
 //bool addSpkSample(const char* name, char* data, unsigned len);
 //void rmSpkSample(unsigned spkId);

@@ -294,7 +294,7 @@ static void appendDataToReportFile(BampMatchParam &par)
     }
     else if(par.bHit){
         vector<DataBlock> prjData;
-        par.ptrBuf->getDataSegment(1, 0, par.endIdx, par.endOffset, prjData);
+        par.ptrBuf->getDataSegment(1, 0, par.preIdx, par.preOffset, prjData);
         char savedfile[MAX_PATH];
         gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, par.curtime.tv_sec, par.pid, NULL, NULL, NULL);
         char *stSufPtr = strrchr(savedfile, '.');

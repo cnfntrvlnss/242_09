@@ -37,6 +37,6 @@ bool spkex_addSpk(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkI
 const SpkInfo* spkex_rmSpk(const SpkInfo* spk);
 bool spkex_init(const char* cfgfile);
 void spkex_rlse();
-bool spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score);
+int spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score);
 
 #endif

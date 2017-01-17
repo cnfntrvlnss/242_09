@@ -157,7 +157,7 @@ int GetDLLVersion(char *p, int &length)
 
 static void initGlobal(BufferConfig &myBufCfg)
 {
-	string langReports = "14 0x20,";
+    string langReports = "14 0x20,";
     string langReportFilter = "0x20 99,";
 
     Config_getValue(&g_AutoCfg, "", "eth4ReportIP", g_szEth4ReportIP);
@@ -196,12 +196,14 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bDiscardable)
             LOG4Z_VAR(g_bSaveAfterRec)
-            LOG4Z_VAR(formLangReportsStr(g_mLangReports))
-            LOG4Z_VAR(formReportFilterStr(g_mLangReportFilter).c_str())
+            LOG4Z_VAR(formLangReportsStr(g_mLangReports).c_str()) LOG4Z_VAR(formReportFilterStr(g_mLangReportFilter).c_str())
             LOG4Z_VAR(g_AutoCfg.configFile)
             LOG4Z_VAR(myBufCfg.waitSecondsStep)
             LOG4Z_VAR(myBufCfg.waitSeconds)
             LOG4Z_VAR(myBufCfg.waitLength )
+            LOG4Z_VAR(myBufCfg.m_uBlockSize)
+            LOG4Z_VAR(myBufCfg.m_uBlocksMin)
+            LOG4Z_VAR(myBufCfg.m_uBlocksMax)
             );
 }
 
@@ -330,7 +332,7 @@ int AddCfgByBuf(const char *pData,
     return 0;
 }
 
-static bool addSpkPerFile(const char* szDir, const char* filename)
+bool addSpkPerFile(const char* szDir, const char* filename)
 {
     SpkInfoChd *spk = new SpkInfoChd();
     if(!spk->fromStr(filename)){
@@ -354,15 +356,21 @@ static bool addSpkPerFile(const char* szDir, const char* filename)
     bool ret = false;
     if(retr == mdlLen){
         const SpkInfo* oldSpk;
-        spkex_addSpk(spk, mdlData, mdlLen, oldSpk);
+        bool retspkex = spkex_addSpk(spk, mdlData, mdlLen, oldSpk);
         if(oldSpk){
             delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(oldSpk));
+        }
+        if(!retspkex){
+            LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed in spkex_addSpk, filepath: %s", filePath.c_str());
+        }
+        else{
+            ret = true;
         }
     }
     else{
         LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed to read file: %s, real: %u; read: %u.", filePath.c_str(), mdlLen, retr);
     }
-    delete mdlData;
+    delete []mdlData;
     return ret;
 }
 

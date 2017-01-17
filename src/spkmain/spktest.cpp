@@ -221,32 +221,35 @@ int main(int argc, char *argv[])
     }
     for(size_t idx=0; idx < vecPcms.size(); idx ++){
         unsigned uLogLen = 0;
-        uLogLen += snprintf(szLog + uLogLen, 1024, "SPKREC file: %s ", vecPcms[idx].c_str());
-        DEBUG_LOG("%s", szLog);
-        unsigned dataLen;
-        char *pData, *addBuf1, *addBuf2;
-        if(prepareBufAndData(vecPcms[idx].c_str(), dataLen, pData, addBuf1, addBuf2)){
+        while(true){
+            uLogLen += snprintf(szLog + uLogLen, 1024, "SPKREC file: %s ", vecPcms[idx].c_str());
+            unsigned dataLen;
+            char *pData, *addBuf1, *addBuf2;
+            if(!prepareBufAndData(vecPcms[idx].c_str(), dataLen, pData, addBuf1, addBuf2)){
+                uLogLen += snprintf(szLog + uLogLen, 1024, "NO_DATA ");
+                break;
+            }
             unsigned smpLen = dataLen /2;
             short* smpBuf = reinterpret_cast<short*>(pData);
             short *smpAddBuf1 = reinterpret_cast<short*>(addBuf1);
             short *smpAddBuf2 = reinterpret_cast<short*>(addBuf2);
             unsigned mcutLen = smpLen;
             uLogLen += snprintf(szLog + uLogLen, 1024, "DataLen=%u ", smpLen / SC_PCMSMPS);
-            if(!cutMusic(hMcut, smpBuf, smpLen, smpAddBuf1, mcutLen)) continue;
+            if(!cutMusic(hMcut, smpBuf, smpLen, smpAddBuf1, mcutLen)){
+                break;
+            }
             int vadLen = mcutLen;
             VADBuffer(true, smpAddBuf1, mcutLen, smpAddBuf2, vadLen);
             uLogLen += snprintf(szLog + uLogLen, 1024, "MCutLen=%u VadLen=%u ", mcutLen / SC_PCMSMPS, vadLen / SC_PCMSMPS);
-            DEBUG_LOG("%s", szLog);
             if(vadLen < VALID_PCMSMPS){
-                uLogLen += snprintf(szLog + uLogLen, 1024, " too short");
-                continue;
+                break;
             }
 
             const SpkInfo* tspk;
             float spkScore;
-            spkex_score(smpAddBuf2, vadLen, tspk, spkScore);
+            int retscr = spkex_score(smpAddBuf2, vadLen, tspk, spkScore);
             if(tspk == NULL){
-                uLogLen += snprintf(szLog + uLogLen, 1024, " SPK=None ");
+                if(retscr == 0) uLogLen += snprintf(szLog + uLogLen, 1024, " NO_SPK ");
             }
             else{
                 const SpkInfoEx* tspkex = static_cast<const SpkInfoEx*>(tspk);
@@ -254,12 +257,12 @@ int main(int argc, char *argv[])
                 mdname = getBasename(mdname.c_str());
                 uLogLen += snprintf(szLog + uLogLen, 1024, " SPKName=%s SPKScore=%0.2f ", mdname.c_str(), spkScore);
             }
-            DEBUG_LOG("%s", szLog);
-            if(resfp){
-                fprintf(resfp, "%s\n", szLog);
-            }
+            break;
         }
-
+        DEBUG_LOG("%s", szLog);
+        if(resfp){
+            fprintf(resfp, "%s\n", szLog);
+        }
     }
     if(resfp) fclose(resfp);
 
