@@ -62,17 +62,18 @@ FuncNotifyProjFinish funcNotifyProjFinish;
 FuncIsAllFinished funcIsAllFinished;
 #define MAX_PATH 512
 #define QUATEMACRO(x) #x
+#define QUATEMACROS(x) QUATEMACRO(x)
 unsigned getPackBytesByCompl(){
     unsigned ret = 320000;
 #ifdef TESTDIR
-    if(strncmp(QUATEMACRO(TESTDIR), "../testZP", 9) == 0){
+    if(strncmp(QUATEMACROS(TESTDIR), "testZP", 9) == 0){
         ret = 48000;
     }
 #endif
     return ret;
 }
 
-unsigned g_packetBytes=getPackBytesByCompl();
+unsigned g_packetBytes= getPackBytesByCompl();
 bool g_bSingleProjectMode = false;
 //namespace zen4audio{
 //    void notifyProjFinish(unsigned long);
@@ -300,7 +301,7 @@ void *sendProjectProcess(void *param)
             if(bulksize % 2 != 0){
                 fprintf(stderr, "the length of data is odd, skiplen: %d, headlen: %ld, datalen: %ld, file %s.\n", skipLen, headlen, ptask->dataLen, ptask->filePath);
             }
-			if(g_packetBytes == 48000 && bulksize == g_packetBytes || bulksize > 0){
+			if(g_packetBytes == 48000 && bulksize == g_packetBytes || g_packetBytes != 48000 && bulksize > 0){
                 WavDataUnit dataUnit;
                 dataUnit.m_iPCBID = ptask->id;
                 dataUnit.m_iDataLen = bulksize;

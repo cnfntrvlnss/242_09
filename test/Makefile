@@ -1,7 +1,7 @@
 CC=gcc#icc
 CCC=g++#icpc
 CXX=g++#icpc
-TESTDIR:=../test09
+TESTDIR:=testZP
 CPPFLAGS=-g -DTESTDIR=${TESTDIR}
 LDFLAGS:=-Wl,-rpath,${IOADIR}
 SRCCS:=$(addprefix src/,apue.c myiofuncs.c)
@@ -15,4 +15,4 @@ testmain: $(OBJCS) $(OBJCPPS)
 
 .PHONY: DEPLOY
 deploy:
-	cp -t ${TESTDIR} testmain
+	cp -t ../${TESTDIR} testmain

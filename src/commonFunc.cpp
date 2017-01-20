@@ -236,7 +236,9 @@ void clockoutput_start(const char *fmt, ...)
 std::string clockoutput_end()
 {
     AutoLock myLock(clockoutput_lock);
-    std::vector<std::pair<struct timespec, std::string> > & cur = allClockStack[pthread_self()];
+    pthread_t thd = pthread_self();
+    assert(allClockStack.find(thd) != allClockStack.end());
+    std::vector<std::pair<struct timespec, std::string> > & cur = allClockStack[thd];
     struct timespec lastclock = cur[cur.size() -1].first;
     ostringstream oss;
     struct timespec tmptm;

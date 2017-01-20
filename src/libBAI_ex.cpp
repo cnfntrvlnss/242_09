@@ -6,6 +6,12 @@
  ************************************************************************/
 
 #include "libBAI_ex.h"
+//#define USE_SPK_VAD
+#ifdef USE_SPK_VAD
+#include "dllSRVADCluster.h"
+#else
+#include "dllSRVADCluster_lshj.h"
+#endif
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -127,39 +133,183 @@ bool BampMatchObject::loadModel(const char *libFile)
     return true;
 }
 
-/**
- * the memory pointed by pData is freed inside function.
- */
- /*
-bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
+struct EngInputCompanyParam{
+    EngInputCompanyParam(unsigned idx, unsigned segidx, unsigned unitidx, unsigned offset):
+    idx(idx), segidx(segidx), unitidx(unitidx), offset(offset)
+    {}
+    unsigned idx;
+    unsigned segidx;
+    unsigned unitidx;
+    unsigned offset;
+};
+
+struct InputVADParam{
+    InputVADParam(const char*param1, unsigned param2, unsigned param3, unsigned param4):
+        buf(param1), len(param2), projIdx(param3), segIdx(param4), isValid(false)
+    {}
+    const char *buf;
+    unsigned len;
+    unsigned projIdx;
+    unsigned segIdx;
+    bool isValid;
+};
+
+struct PreBampEngVADTask{
+    PreBampEngVADTask(){
+        this->len = 0;
+        this->taskArr = NULL;
+        pthread_mutex_init(&lock, NULL);
+        pthread_cond_init(&cond, NULL);
+    }
+    ~PreBampEngVADTask(){
+        pthread_mutex_destroy(&lock);
+        pthread_cond_destroy(&cond);
+    }
+    void setTask(unsigned len, InputVADParam *taskArr){
+        pthread_mutex_lock(&lock);
+        this->len = len;
+        this->taskArr = taskArr;
+        pthread_mutex_unlock(&lock);
+        pthread_cond_signal(&cond);
+    }
+    void waitTask(){
+        pthread_mutex_lock(&lock);
+        while(len == 0){
+            pthread_cond_wait(&cond, &lock);
+        }
+        pthread_mutex_unlock(&lock);
+    }
+    void notifyFinish(){
+        pthread_mutex_lock(&lock);
+        len = 0;
+        pthread_mutex_unlock(&lock);
+        pthread_cond_signal(&cond);
+    }
+    void waitFinish(){
+        pthread_mutex_lock(&lock);
+        while(len != 0){
+            pthread_cond_wait(&cond, &lock);
+        }
+        pthread_mutex_unlock(&lock);
+    }
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    unsigned len;
+    InputVADParam *taskArr;
+private:
+    PreBampEngVADTask(const PreBampEngVADTask&);
+    PreBampEngVADTask& operator=(const PreBampEngVADTask);
+};
+
+#define BAMPSEGMENTLEN 48000
+float g_fAfterVadSecs = 0.05;
+PreBampEngVADTask *g_pPreBampEngVADTasks = NULL;
+unsigned g_uPreBampEngVADTasksLen = 0;
+pthread_t *g_PreBampVADThreadIDs = NULL;
+void * preBampEngVADThread(void *param)
+{
+    PreBampEngVADTask *pTask = reinterpret_cast<PreBampEngVADTask*>(param);
+    short *tmpBuf = (short*)malloc(BAMPSEGMENTLEN);
+    unsigned tmpBufLen = BAMPSEGMENTLEN / 2;
+    while(true){
+        pTask->waitTask();
+        for(size_t idx=0; idx < pTask->len; idx++){
+            InputVADParam& task = pTask->taskArr[idx];
+            int riSampleNum = tmpBufLen;
+            VADBuffer(true, reinterpret_cast<short*>(const_cast<char*>(task.buf)), task.len / 2, tmpBuf, riSampleNum);
+            if(!((float)riSampleNum / 16000 < g_fAfterVadSecs)){
+                task.isValid = true;
+            }
+            //if(rand() % 100 < 60) task.isValid = true;
+        }
+        pTask->notifyFinish();
+    }
+    free(tmpBuf);
+}
+
+void filterByVAD(vector<InputVADParam>& input){
+    if(g_uPreBampEngVADTasksLen == 0){
+        BLOGD("in filterByVAD, without configuration of Pre-bamp VAD, skip one round.");   
+        for(size_t idx=0; idx < input.size(); idx++){
+            input[idx].isValid = true;
+        }
+        return;
+    }
+    clockoutput_start("filterByVAD");
+    InputVADParam *taskArr = &(input[0]); 
+    unsigned taskLen = input.size();
+    unsigned step = taskLen / g_uPreBampEngVADTasksLen;
+    if(taskLen % g_uPreBampEngVADTasksLen != 0) step += 1;
+    unsigned thdIdx = 0;
+    unsigned taskIdx = 0;
+    while(taskIdx < taskLen){
+        unsigned curstep;
+        if(taskLen - taskIdx > step){
+            curstep = step;
+        }
+        else{
+            curstep = taskLen - taskIdx;
+        }
+        g_pPreBampEngVADTasks[thdIdx].setTask(curstep, &(taskArr[taskIdx]));
+        thdIdx++;
+        taskIdx += curstep;
+    }
+    assert(thdIdx <= g_uPreBampEngVADTasksLen);
+    for(size_t idx = 0; idx < thdIdx; idx++){
+        g_pPreBampEngVADTasks[idx].waitFinish();
+    }
+    LOGFMTT(clockoutput_end().c_str());
+}
+
+bool BampMatchObject::bamp_match_vad(std::vector<BampMatchParam>& allData)
 {
     AutoLock mylock(this->lock);
     if(!this->bHasModel){
         BLOGT("in bamp_match no library to use.");
         return false;
     }
-    vector<BAI_InputItem> intoEng;
-    intoEng.resize(allData.size());
+    vector<InputVADParam> vadInput;
     for(size_t idx=0; idx < allData.size(); idx++){
-        intoEng[idx].iAudioID = idx;
-        intoEng[idx].acAudioUrl[0] = '\0';
-        const vector<DataBlock>& curData = allData[idx].data;
-        char *tmpSz = new char[allData[idx].tolLen];
-        unsigned tolLen = 0;
+        vector<DataBlock>& curData = allData[idx].data;
         for(size_t jdx=0; jdx < curData.size(); jdx++){
-            memcpy(tmpSz + tolLen, curData[jdx].getPtr() + curData[jdx].offset, curData[jdx].len);
-            tolLen += curData[jdx].len;
+            vadInput.push_back(InputVADParam(curData[jdx].getPtr(), curData[jdx].len, idx, jdx));
         }
-        assert(tolLen == allData[idx].tolLen);
-        intoEng[idx].pcDataBuffer = tmpSz;
-        intoEng[idx].iBufferSize = tolLen;
-        intoEng[idx].iDataType = 0;
-        BLOGT("saved audio segment before bamp match call, file: %s.", saveProjectSegment(allData[idx].curtime, allData[idx].pid, &allData[idx].preLen,  intoEng[idx].pcDataBuffer, intoEng[idx].iBufferSize).c_str());
     }
+    filterByVAD(vadInput);
+    vector<InputVADParam> vadRet;
+    for(size_t idx=0; idx < vadInput.size(); idx++){
+        if(vadInput[idx].isValid){
+            vadRet.push_back(vadInput[idx]);
+        }
+        else{
+            BampMatchParam &curPrm = allData[vadInput[idx].projIdx];
+            unsigned realPreLen = curPrm.preLen + vadInput[idx].segIdx * BAMPSEGMENTLEN;
+            BLOGT("saved audio segment treated as noise after pre-Bamp VAD detection, file: %s.", saveProjectSegment(curPrm.curtime, curPrm.pid, &realPreLen,  const_cast<char*>(vadInput[idx].buf), vadInput[idx].len).c_str());
+        }
+    }
+    if(vadRet.size() == 0) return true;
+    unsigned intoEngSize = vadRet.size();
+    BAI_InputItem *intoEng = new BAI_InputItem[intoEngSize];
+    for(size_t idx=0; idx < vadRet.size(); idx++){
+        BAI_InputItem &curItem = intoEng[idx];
+        curItem.iAudioID = idx;
+        //sprintf(curItem.acAudioUrl, "\0");
+        curItem.acAudioUrl[0] = '\0';
+        curItem.pcDataBuffer = new char[BAMPSEGMENTLEN];
+        memcpy(curItem.pcDataBuffer, vadRet[idx].buf, vadRet[idx].len);
+        curItem.iBufferSize = vadRet[idx].len;
+        curItem.iDataType = 0;
+
+        BampMatchParam &curPrm = allData[vadRet[idx].projIdx];
+        unsigned realPreLen = curPrm.preLen + vadRet[idx].segIdx * BAMPSEGMENTLEN;
+        BLOGT("saved audio segment before bamp match call, file: %s.", saveProjectSegment(curPrm.curtime, curPrm.pid, &realPreLen,  intoEng[idx].pcDataBuffer, intoEng[idx].iBufferSize).c_str());
+    }
+
     BAI_ResultList *pRes = NULL;
-    BAI_Code err = BAI_Retrieval_Partly_VAD(&intoEng[0], intoEng.size(), pRes, &(this->hdl));
+    BAI_Code err = BAI_Retrieval_Partly_VAD(intoEng, intoEngSize, pRes, &(this->hdl));
     if(err != BAI_OK){
         BLOGE("in bamp_match failed to call BAI_Retrieval_Partly, err: %d.", err);
+        delete [] intoEng;
         return false;
     }
 
@@ -169,19 +319,22 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
     desres.m_pDataUnit[0] = &desdata;
     if(pRes == NULL){
         BLOGE("in bamp_match, no result after BAI_Retrieval.. pRes == NULL.");
+        delete [] intoEng;
         return false;
     }
     ostringstream oss;
-    for(size_t idx=0; idx < intoEng.size(); idx++){
+    for(size_t idx=0; idx < intoEngSize; idx++){
         unsigned iTestID = pRes[idx].iTestID;
-        unsigned long pid = allData[iTestID].pid;
-        unsigned len = allData[iTestID].tolLen;
-        unsigned preLen = allData[iTestID].preLen;
-        struct timeval curtime = allData[iTestID].curtime;
+        unsigned dataIdx = vadRet[idx].projIdx;
+        unsigned unitidxInData = vadRet[idx].segIdx;
+        unsigned long pid = allData[dataIdx].pid;
+        unsigned len = BAMPSEGMENTLEN;
+        unsigned preLen = allData[dataIdx].preLen + unitidxInData * BAMPSEGMENTLEN;
+        struct timeval curtime = allData[dataIdx].curtime;
         desdata.m_iPCBID = pid;
-        desdata.m_iDataLen = allData[iTestID].data[0].len;
-        desdata.m_pData = allData[iTestID].data[0].getPtr() + allData[iTestID].data[0].offset;
-	oss.str("");
+        desdata.m_iDataLen = BAMPSEGMENTLEN;
+        desdata.m_pData = allData[dataIdx].data[unitidxInData].getPtr();
+        oss.str("");
         oss<< "PID=" << pid<< " "<< "WaveLen="<< (len) / 16000<< " Offset="<< preLen / 16000<< " ";
         if(pRes[idx].iResultNum == 0){
             BLOGT("%sbamp_match no result after BAI_Retrieval... err: %d", oss.str().c_str(), pRes[idx].eErrCode);
@@ -206,35 +359,29 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
                 desres.m_iAlarmType = g_uBampFDServType;
             }
             desres.m_iTargetID /= 2;
-            //allData[iTestID].targetID = desres.m_iTargetID;
             desres.m_iHarmLevel = 0;
             desres.m_fTargetMatchLen = curhit.fDurationS;
             desres.m_fLikely = curhit.fMatchedRate;
             desres.m_fSegLikely[0] = curhit.fMatchedRate;
             desres.m_fSegPosInPCB[0] = ((float)preLen) / 16000 + curhit.fTimeStartInTestS;
             desres.m_fSegPosInTarget[0] = curhit.fTimeStartInWaveS;
-            allData[iTestID].pResult = &desres;
-            funcBampSubmitResult(allData[iTestID], oss);
-            //allData[iTestID].pResult = NULL;
+            BampResultParam resPrm;
+            resPrm.pResult = &desres;
+            resPrm.curtime =  curtime;
+            resPrm.bPreHit = allData[dataIdx].bPreHit;
+            resPrm.ptrBuf = allData[dataIdx].ptrBuf;
+            funcBampSubmitResult(resPrm, oss);
+            allData[dataIdx].bHit = true;
             oss.put('\0');
             BLOGI("%s", oss.str().c_str());
         }
     }
+
+    delete [] intoEng;
     delete [] pRes;
     return true;
 }
-*/
 
-struct EngInputCompanyParam{
-    EngInputCompanyParam(unsigned idx, unsigned segidx, unsigned unitidx, unsigned offset):
-    idx(idx), segidx(segidx), unitidx(unitidx), offset(offset)
-    {}
-    unsigned idx;
-    unsigned segidx;
-    unsigned unitidx;
-    unsigned offset;
-};
-#define BAMPSEGMENTLEN 48000
 bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
 {
     AutoLock mylock(this->lock);
@@ -370,7 +517,7 @@ bool BampMatchObject::bamp_match(std::vector<BampMatchParam>& allData)
     delete [] pRes;
     return true;
 }
-/*
+
 bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime)
 {
     AutoLock mylock(this->lock);
@@ -444,7 +591,7 @@ bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, u
                 desres.m_fSegLikely[0] = curhit.fMatchedRate;
                 desres.m_fSegPosInPCB[0] = fOffset + curhit.fTimeStartInTestS;
                 desres.m_fSegPosInTarget[0] = curhit.fTimeStartInWaveS;
-                funcBampSubmitResult(curtime, &desres, oss);
+                //funcBampSubmitResult(curtime, &desres, oss);
                 oss.put('\0');
                 BLOGI("%s", oss.str().c_str());
                 bHit = true;
@@ -457,7 +604,7 @@ bool BampMatchObject::bamp_match(unsigned long pid, char *pcm1, unsigned len1, u
     
     return bHit;
 }
-*/
+
 vector<BampMatchObject* > g_AllBampObjects;
 static LockHelper g_BampLock;
 static pthread_key_t g_BampHandleKey;
@@ -524,7 +671,7 @@ static void closeBampHandle(void* hdl){
 }
 
 static void * UpdateLibraryThread(void *param);
-bool bamp_init(SummitBampResult callbck)
+bool bamp_init(SummitBampResult callbck, unsigned vadParallelNum, float afterVadRatio)
 {
     AutoLock mylock(g_BampLock);
     BLOGI("in bamp_init, starting init BAI.");
@@ -541,8 +688,33 @@ bool bamp_init(SummitBampResult callbck)
     funcBampSubmitResult = callbck;
     g_BampStatus = INITED;
     BLOGI("in bamp_init, finishing init BAI.");
-
-    int retcrt = pthread_create(&g_BampThreadID, NULL, UpdateLibraryThread, NULL);
+    int retcrt;
+    g_uPreBampEngVADTasksLen = vadParallelNum;
+    if(g_uPreBampEngVADTasksLen > 0){
+        #ifdef USE_SPK_VAD
+        if(!InitVADCluster("ioacas/VAD_SID.cfg")){
+        #else
+        if(!InitVADCluster_File()){
+        #endif
+            BLOGE("in bamp_init, faile to initVADCluster_File.");
+            g_uPreBampEngVADTasksLen = 0;
+        }
+        else{
+            g_fAfterVadSecs = afterVadRatio;
+            g_pPreBampEngVADTasks = new PreBampEngVADTask[g_uPreBampEngVADTasksLen];
+            g_PreBampVADThreadIDs = new pthread_t[g_uPreBampEngVADTasksLen];
+            for(size_t idx=0; idx < g_uPreBampEngVADTasksLen; idx++){
+                retcrt = pthread_create(&(g_PreBampVADThreadIDs[idx]), NULL, preBampEngVADThread, &(g_pPreBampEngVADTasks[idx]));
+                if(retcrt != 0){
+                    BLOGE("fail to create UpdateLibraryThread. err: %d", retcrt);
+                    exit(1);
+                }
+                BLOGI("in bamp_init, preBampEngVADThread %u has been created.", idx);
+            }
+        }
+    }
+    
+    retcrt = pthread_create(&g_BampThreadID, NULL, UpdateLibraryThread, NULL);
     if(retcrt != 0){
         BLOGE("fail to create UpdateLibraryThread. err: %d", retcrt);
     }
@@ -556,6 +728,16 @@ bool bamp_rlse()
     pthread_cancel(g_BampThreadID);
     pthread_join(g_BampThreadID, NULL);
     BLOGI("in bamp_rlse, updateLibraryThread has been canceled.");
+    if(g_uPreBampEngVADTasksLen > 0){
+        for(size_t idx=0; idx < g_uPreBampEngVADTasksLen; idx++){
+            pthread_cancel(g_PreBampVADThreadIDs[idx]);
+            pthread_join(g_PreBampVADThreadIDs[idx], NULL);
+        }
+        delete [] g_pPreBampEngVADTasks;
+        delete [] g_PreBampVADThreadIDs;
+        FreeVADCluster();
+        BLOGI("in bamp_rlse, shutdown PreBampVAD module.");
+    }
 
     if(g_AllBampObjects.size() > 0){
         BLOGI("in bamp_rlse, there are %u matchObjects to be deleted.", g_AllBampObjects.size());

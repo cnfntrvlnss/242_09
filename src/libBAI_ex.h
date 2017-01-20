@@ -46,6 +46,7 @@ struct BampMatchObject{
     bool loadModel(const char* libFile);
     bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime);
     bool bamp_match(std::vector<BampMatchParam>& allData);
+    bool bamp_match_vad(std::vector<BampMatchParam>& allData);
 private:
     BampMatchObject(const BampMatchObject&);
     BampMatchObject& operator=(const BampMatchObject&);
@@ -75,7 +76,8 @@ struct BampResultParam{
     zen4audio::ProjectBuffer* ptrBuf;
 };
 typedef void (*SummitBampResult)(BampResultParam param, std::ostream& oss);
-bool bamp_init(SummitBampResult callbck);
+//bool bamp_init(SummitBampResult callbck);
+bool bamp_init(SummitBampResult callbck, unsigned vadParallelNum=1, float afterVadRatio=0.05);
 bool bamp_rlse();
 //bool bamp_match(unsigned long pid, short *pcmData, unsigned pcmLen, unsigned preLen, struct timeval curtime);
 //bool bamp_match(unsigned long pid, char *pcm1, unsigned len1, unsigned preLen, struct timeval curtime);

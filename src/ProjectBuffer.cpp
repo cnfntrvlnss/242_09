@@ -34,10 +34,10 @@ static unsigned g_uBlocksMin = 300; //reserved for potential use.
 static unsigned g_uBlocksMax = 600;
 static list<DataBlock> g_liFreeBlocks;
 static set<DataBlock> g_liUsedBlocks;
-static LockHelper g_BlockManaLocker;
+//static LockHelper g_BlockManaLocker;
 static inline DataBlock BlockMana_alloc()
 {
-    AutoLock lock(g_BlockManaLocker);
+    //AutoLock lock(g_BlockManaLocker);
     list<DataBlock>::iterator it = g_liFreeBlocks.begin();
     for(; it != g_liFreeBlocks.end(); it++){
         if(it->getPeerNum() == 1) break;
@@ -63,7 +63,7 @@ static inline DataBlock BlockMana_alloc()
 
 static inline void BlockMana_relse(const DataBlock& blk)
 {
-    AutoLock lock(g_BlockManaLocker);
+    //AutoLock lock(g_BlockManaLocker);
     assert(blk.offset + blk.len <= blk.getCap());
     assert(g_liUsedBlocks.find(blk) != g_liUsedBlocks.end());
     if(g_liFreeBlocks.size() + g_liUsedBlocks.size() <= g_uBlocksMin){
@@ -190,7 +190,7 @@ ostream& operator<<(ostream& str, ProjectBuffer::ArrivalRecord rec)
     return str;
 }
 
-bool ProjectBuffer::relse(){
+bool ProjectBuffer::relse(vector<DataBlock>& retArr){
     AutoLock lock(m_BufferLock);
     if(mainRegEdTime.tv_sec == 0){
         return false;
@@ -204,19 +204,12 @@ bool ProjectBuffer::relse(){
     }
     if(bRelsed) return true;
     bRelsed = true;
-    /*
-    if(this->bBampHit && bampFp){
-        vector<DataBlock> remData;
-        unsigned idx = arrUnits.size() - 1;
-        getDataSegment(this->bampEndIdx, this->bampEndOffset, idx, arrUnits[idx].offset + arrUnits[idx].len, remData);
-        this->funcSaveData(bampFp, remData);
-        fclose(bampFp);
-    } */
+
     unsigned tolLen = 0;
     for(size_t idx=1; idx < arrUnits.size(); idx++){
         tolLen += arrUnits[idx].len;
-        BlockMana_relse(arrUnits[idx]);
     }
+    retArr.insert(retArr.end(), arrUnits.begin() + 1, arrUnits.end());
     LOGFMT_INFO(g_BufferLogger, "PID=%lu SIZE=%lu release ProjectBuffer.", this->ID, tolLen);
     LOGFMT_DEBUG(g_BufferLogger, "PID=%lu MainReg start %ld %ld; end: %ld %ld.", mainRegStTime.tv_sec, mainRegEdTime.tv_usec, mainRegEdTime.tv_sec, mainRegEdTime.tv_usec);
 
@@ -227,7 +220,7 @@ bool ProjectBuffer::relse(){
  * 返回成功接收的长度.
  *
  */
-unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, time_t curTime)
+unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, DataBlock* blk, time_t curTime)
 {
     AutoLock lock(m_BufferLock);
     unsigned ret = 0;
@@ -239,18 +232,11 @@ unsigned ProjectBuffer::recvData(char *data, unsigned dataLen, time_t curTime)
     ret += size1;
     arrUnits.back().len += size1;
     if(size2 > 0){
-        DataBlock ele = BlockMana_alloc();
-        if(ele.getPtr()){
-            arrUnits.push_back(ele);
-            memcpy(arrUnits.back().getPtr(), data + size1, size2);
-            ret += size2;
-            arrUnits.back().len += size2;
-        }
-        else{
-            ret -= size1;
-            arrUnits.back().len -= size1;
-            LOGFMT_WARN(g_BufferLogger, "PID=%lu failed to store data, curBlockCount=%u, for no DataBlock available.", this->ID, (arrUnits.size() -1));
-        }
+        assert(blk->getPtr());
+        arrUnits.push_back(*blk);
+        memcpy(arrUnits.back().getPtr(), data + size1, size2);
+        ret += size2;
+        arrUnits.back().len += size2;
     }
     lastRecord.seconds = curTime;
     lastRecord.unitIdx = arrUnits.size() - 1;
@@ -303,10 +289,11 @@ bool ProjectBuffer::isFull(time_t curTime)
 //
 struct ProjectCheckbook{
     ProjectCheckbook():
-        prj(NULL), cnt(0)
+        prj(NULL), cnt(0), leftSize(0)
     {}
     ProjectBuffer *prj;
     int cnt;
+    unsigned leftSize;
 };
 static std::map<unsigned long, ProjectCheckbook> g_mapProjs;
 static std::set<unsigned long> g_setPrevFullIDs;
@@ -392,15 +379,32 @@ void recvProjSegment(ProjectSegment param, bool iswait, bool bBamp)
         LOGFMT_DEBUG(g_BufferLogger, "PID=%lu arrives, %u projects in buffer.", pid, g_mapProjs.size());
     }
     tmpPrj = g_mapProjs[pid].prj;
+    DataBlock blk;
+    if(g_mapProjs[pid].leftSize < dataLen){
+        blk = BlockMana_alloc();
+        if(blk.getPtr()){
+            g_mapProjs[pid].leftSize = BLOCKSIZE - dataLen + g_mapProjs[pid].leftSize;
+        }
+        else{
+            LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. as DataBlock pool is full.");
+            g_ProjsLocker.unLock();
+            return ;
+        }
+    }
+    else{
+        g_mapProjs[pid].leftSize -= dataLen;
+    }
     g_mapProjs[pid].cnt ++;
     g_ProjsLocker.unLock();
 
-    unsigned rlen = tmpPrj->recvData(data, dataLen);
+    unsigned rlen = tmpPrj->recvData(data, dataLen, &blk);
+    /*
     if(rlen == dataLen){
     } 
     else{
         LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. Total: %u; Received: %u.", pid, dataLen, rlen);
     }
+    */
     returnBuffer(tmpPrj);
 }
 
@@ -486,7 +490,12 @@ void returnBuffer(ProjectBuffer* obtained)
     assert(g_mapProjs[pid].cnt > 0);
     g_mapProjs[pid].cnt --;
     if(g_mapProjs[pid].cnt != 0) return; 
-    if(obtained->relse()){
+    vector<DataBlock> retArr;
+    if(obtained->relse(retArr)){
+
+        for(size_t idx=0; idx < retArr.size(); idx++){
+            BlockMana_relse(retArr[idx]);
+        }
         assert(g_setPostFullIDs.find(obtained->ID) != g_setPostFullIDs.end());
         g_setPostFullIDs.erase(obtained->ID);
         assert(g_setPrevFullIDs.find(obtained->ID) == g_setPrevFullIDs.end());

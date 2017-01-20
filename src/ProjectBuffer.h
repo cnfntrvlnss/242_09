@@ -21,49 +21,6 @@
 typedef bool(*FuncSaveData)(FILE*, std::vector<DataBlock>&);
 namespace zen4audio{
 
-/*{
-    typedef char DataUnit;
-    DataUnit* myAlloc();
-    void myFree(DataUnit* data);
-
-    //包装一个DataUnit数组，用于DataUnit数组的共享.
-    struct DataBlock{
-        DataBlock():
-            m_buf(NULL), m_len(0), m_cnt(NULL)
-        { }
-
-        DataBlock(const DataBlock& other){
-            setData(other);
-        }
-        DataBlock& operator=(const DataBlock& other){
-            if(this == &other) return *this;
-            relse();
-            setData(other);
-            return *this;
-        }
-        ~DataBlock(){
-            relse();
-        }
-        bool initData(){
-            bool bRet = false;
-            DataUnit* blk = myAlloc();
-            if(blk != NULL){
-                m_buf = blk;
-                m_cnt = new short;
-                *m_cnt= 1;
-                bRet = true;
-            }
-            return bRet;
-        }
-        void setData(const DataBlock& other);
-        void relse();
-
-        char *m_buf;
-        unsigned m_len;
-        short *m_cnt;
-    };
-}*/
-
 extern struct timeval ZERO_TIMEVAL;
 /**
  *  用于节目缓存的类, 比之前的实现相比，最小化了功能；用到了唯一的内存管理代码，用于缓存空间的计数与控制.
@@ -80,7 +37,9 @@ public:
         setPid(pid, curTime);
     }
     ~ProjectBuffer(){
-        assert(relse());
+        std::vector<DataBlock> retArr;
+        assert(relse(retArr));
+        assert(retArr.size() == 0);
     }
     void setPid(unsigned long, time_t curTime =0);
     struct timeval getPrjTime(){
@@ -146,7 +105,7 @@ public:
         mainRegEdTime = curtime;
     }
     
-    bool relse();
+    bool relse(std::vector<DataBlock>& retArr);
     void getData(std::vector<DataBlock>& vec);
     unsigned getDataLength();
     bool isFull(time_t curTime = 0);
@@ -155,7 +114,7 @@ public:
         return bFull;
     }
 
-    unsigned recvData(char *data, unsigned len, time_t curTime = 0);
+    unsigned recvData(char *data, unsigned len, DataBlock* blk, time_t curTime = 0);
     void finishRecv();
     void init(){
         bAlloc = false;

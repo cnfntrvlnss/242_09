@@ -44,6 +44,8 @@ std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_
 static std::map<std::pair<unsigned int, unsigned int>, int> g_mLangReportFilter;
 
 bool g_bUseBamp = true;
+static unsigned g_uBampVadNum = 0;
+static float g_fAfterBampVadSecs = 0.05;
 const char szIoacasDir[]="./ioacas/";
 char m_TSI_SaveTopDir[MAX_PATH]= "/home/ioacas/back_wave/";
 ConfigRoom g_AutoCfg(((string)szIoacasDir + "SysFunc.cfg").c_str());
@@ -144,17 +146,19 @@ static void initGlobal(BufferConfig &myBufCfg)
     g_strIp = GetLocalIP();
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
-    Config_getValue(&g_AutoCfg, "", "ifUseBAMP", g_bUseBamp);
-    Config_getValue(&g_AutoCfg, "", "reportBampThreshold", g_fReportBampThrd);
-    Config_getValue(&g_AutoCfg, "", "baiThreadNum", g_uBampThreadNum);
-    Config_getValue(&g_AutoCfg, "", "serverBampIp", g_szBampIp);
-    Config_getValue(&g_AutoCfg, "", "serverBampPort", g_uBampPort);
+    Config_getValue(&g_AutoCfg, "bamp", "ifUseBAMP", g_bUseBamp);
+    Config_getValue(&g_AutoCfg, "bamp", "reportBampThreshold", g_fReportBampThrd);
+    Config_getValue(&g_AutoCfg, "bamp", "bampVadThreadNum", g_uBampVadNum);
+    Config_getValue(&g_AutoCfg, "bamp", "afterBampVadSeconds", g_fAfterBampVadSecs);
+    Config_getValue(&g_AutoCfg, "bamp", "baiThreadNum", g_uBampThreadNum);
+    Config_getValue(&g_AutoCfg, "bamp", "serverBampIp", g_szBampIp);
+    Config_getValue(&g_AutoCfg, "bamp", "serverBampPort", g_uBampPort);
 
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitLength", myBufCfg.waitLength);
-    Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlockSize", myBufCfg.m_uBlockSize);
+    //Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlockSize", myBufCfg.m_uBlockSize);
     Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMin", myBufCfg.m_uBlocksMin);
     Config_getValue(&g_AutoCfg, "projectBuffer", "bufferBlocksMax", myBufCfg.m_uBlocksMax);
     if(g_szBampIp[0] == '\0') strncpy(g_szBampIp, g_strIp.c_str(), 50);
@@ -177,6 +181,8 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(g_bUseBamp)
             LOG4Z_VAR(g_fReportBampThrd)
             LOG4Z_VAR(g_uBampThreadNum)
+            LOG4Z_VAR(g_uBampVadNum)
+            LOG4Z_VAR(g_fAfterBampVadSecs)
             LOG4Z_VAR(g_szBampIp)
             LOG4Z_VAR(g_uBampPort)
             LOG4Z_VAR(g_bDiscardable)
@@ -210,10 +216,13 @@ int InitDLL(int iPriority,
     g_ReportResultAddr = func;
     
     BufferConfig buffconfig;
+    buffconfig.m_uBlockSize = 48000;
+    buffconfig.m_uBlocksMin = 20 * 600;
+    buffconfig.m_uBlocksMax = 20 * 600;
     initGlobal(buffconfig);
 
     if(g_bUseBamp){
-        if(!bamp_init(reportBampResultSeg)){
+        if(!bamp_init(reportBampResultSeg, g_uBampVadNum, g_fAfterBampVadSecs)){
             LOG_INFO(g_logger, "fail to initailize bamp engine.");
             return 1;
         }
@@ -235,7 +244,8 @@ int InitDLL(int iPriority,
         }
 		pthread_attr_destroy(&threadAttr);
     }
-    if(g_bUseBamp)
+
+    if(true)
     {
 		pthread_attr_t threadAttr;
 		pthread_attr_init(&threadAttr);
@@ -352,6 +362,7 @@ void * bampMatchThread(void *)
                 for(size_t jdx=0; jdx < tmpPar.data.size(); jdx++){
                     tmpPar.tolLen += tmpPar.data[jdx].len;
                 }
+                
                 allBufs.push_back(tmpPar);
             }
             for(size_t idx=0; idx < unPrjs.size(); idx++){
@@ -361,26 +372,16 @@ void * bampMatchThread(void *)
 
             if(allBufs.size() == 0) break;
             LOGFMT_DEBUG(g_logger, "in BampMatchThread, project having new data num: %u", allBufs.size());
-            obj->bamp_match(allBufs);
+            obj->bamp_match_vad(allBufs);
             for(size_t idx=0; idx < allBufs.size(); idx++){
                 BampMatchParam &par = allBufs[idx];
-                allProjs[par.pid]->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, par.bHit);
+                par.ptrBuf->setBampEndPos(par.preIdx, par.preOffset, par.endIdx, par.endOffset, par.bHit);
                 //append reported file here.
                 appendDataToReportFile(par);
             }
             break;
         }
 
-        /*
-        for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end();){
-            map<unsigned long, ProjectBuffer*>::iterator preit = it++;
-            //ProjectBuffer* ptrbuf = preit->second;
-            if(preit->second->getFull()){
-                returnBuffer(preit->second);
-                allProjs.erase(preit);
-            }
-        }
-        */
         string output = clockoutput_end();
         LOGFMTT(output.c_str());
     }

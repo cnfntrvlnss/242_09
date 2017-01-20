@@ -15,6 +15,7 @@
 using namespace std;
 
 #define OUTPUT_FORK(x) fprintf(stderr, #x " in %s.\n", __FILE__)
+/*
 bool InitVADCluster(const char* CfgPath)
 {
     OUTPUT_FORK(InitVADCluster);
@@ -22,6 +23,7 @@ bool InitVADCluster(const char* CfgPath)
 }
  bool VADBuffer(const bool bAllOut, const short* psPCMBuffer, const int iSampleNum, short* psPCMBufferVAD, int& riSampleNumVAD, bool bUseDetector)
 {
+    OUTPUT_FORK(VADBuffer);
     int wlen = iSampleNum < riSampleNumVAD ? iSampleNum : riSampleNumVAD;
     memcpy(psPCMBufferVAD, psPCMBuffer, wlen * sizeof(short));
     riSampleNumVAD = wlen;
@@ -37,7 +39,7 @@ bool FreeVADCluster()
     OUTPUT_FORK(FreeVADCluster);
     return true;
 }
-
+*/
 
 #ifndef LIDFORK
 bool MusicCut_Initial(char* CfgFile,int ThreadNum)

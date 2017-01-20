@@ -89,6 +89,48 @@ static bool g_bSpkUseMCut = true;
 extern float defaultSpkScoreThrd;
 static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
 
+bool addSpkPerFile(const char* szDir, const char* filename)
+{
+    SpkInfoChd *spk = new SpkInfoChd();
+    if(!spk->fromStr(filename)){
+        delete spk;
+        return false;
+    }
+    string filePath = concatePath(szDir, filename);
+    FILE *fp = fopen(filePath.c_str(), "rb");
+    if(fp == NULL){
+        LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed to open file: %s", filePath.c_str());
+        delete spk;
+        return false;
+    }
+    char *mdlData = NULL;
+    unsigned mdlLen = 0;
+    fseek(fp, 0, SEEK_END);
+    mdlLen = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    mdlData = new char[mdlLen];
+    size_t retr = fread(mdlData, 1, mdlLen, fp);
+    bool ret = false;
+    if(retr == mdlLen){
+        const SpkInfo* oldSpk;
+        bool retspkex = spkex_addSpk(spk, mdlData, mdlLen, oldSpk);
+        if(oldSpk){
+            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(oldSpk));
+        }
+        if(!retspkex){
+            LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed in spkex_addSpk, filepath: %s", filePath.c_str());
+        }
+        else{
+            ret = true;
+        }
+    }
+    else{
+        LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed to read file: %s, real: %u; read: %u.", filePath.c_str(), mdlLen, retr);
+    }
+    delete []mdlData;
+    return ret;
+}
+
 static void checkAllPendingSpks()
 {
     while(g_PendingDeleteSpks.size() > 0){
