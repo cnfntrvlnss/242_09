@@ -138,6 +138,7 @@ bool g_bSaveAfterRec=false; // when after processing, for project ID.
 char g_szEth4ReportIP[50];
 static string g_strIp;
 LoggerId g_logger;
+LoggerId g_StatusLogger;
 
 std::map<unsigned long,ProjRecord_t> NewReportedID;
 pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
@@ -184,6 +185,7 @@ static void initGlobal(BufferConfig &myBufCfg)
 		m_TSI_SaveTopDir[tmpLen + 1] = '\0';
 	}
 	g_logger = g_Log4zManager->createLogger("ioacas");
+	g_StatusLogger = g_Log4zManager->createLogger("status");
     char strVer[50];
     int verLen = 50;
     GetDLLVersion(strVer, verLen);
@@ -206,6 +208,7 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(myBufCfg.m_uBlocksMax)
             );
 }
+
 
 static void *ioacas_maintain_procedure(void *);
 int InitDLL(int iPriority,
@@ -258,7 +261,7 @@ int SendData2DLL(WavDataUnit *p)
         LOG_WARN(g_logger, szHead<<"fail to receive data as ioacas being uninitialized.");
         return -1;
     }
-
+    clockoutput_start("SendData2DLL");
     if(g_bSaveAfterRec){
         pthread_mutex_lock(&g_lockNewReported);
         if(NewReportedID.find(p->m_iPCBID) != NewReportedID.end())
@@ -275,6 +278,8 @@ int SendData2DLL(WavDataUnit *p)
     pseg.data = p->m_pData;
     pseg.len = p->m_iDataLen;
     recvProjSegment(pseg, !g_bDiscardable, false);
+    string output = clockoutput_end();
+    LOGFMTT(output.c_str());
     LOG_TRACE(g_logger, szHead<< "have put data to GlobalBuffer.");
     return 0;
 }
@@ -441,6 +446,9 @@ void maintain_newreported(time_t curtime, unsigned seconds)
 
 void *ioacas_maintain_procedure(void *)
 {
+    while(true){
+    sleep(3);
+    //select(NULL, NULL, NULL, NULL, &steptv);
     time_t cur_time;
     time(&cur_time);
 
@@ -464,5 +472,7 @@ void *ioacas_maintain_procedure(void *)
         }
     }
     ioareg_maintain_procedure(cur_time);
+
+}
     return NULL;
 }

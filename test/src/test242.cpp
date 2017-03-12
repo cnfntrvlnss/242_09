@@ -248,6 +248,9 @@ ProjInfo* ProjInfoIter::next()
 string g_AudioDir;
 ProjInfoIter g_iterProjInfo;
 pthread_mutex_t sendCSLocker = PTHREAD_MUTEX_INITIALIZER;
+/**
+ *
+ */
 void *sendProjectProcess(void *param)
 {
 	pthread_t curpid = pthread_self();

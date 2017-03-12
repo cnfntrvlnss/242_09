@@ -11,6 +11,7 @@
 #include "utilites.h"
 #include "ProjectBuffer.h"
 #include "ioareg.h"
+#include "../../serv242_09/src/audiz/audizcli_p.h"
 
 #include <set>
 
@@ -141,11 +142,27 @@ static std::string formReportFilterStr(const std::map<int, int> &filter)
     return oss.str();
 }
 
+struct SpkMdlStVecImpl: public SpkMdlStVec, SpkMdlStVec::iterator
+{
+    SpkMdlStVecImpl* iter(){
+        return this;
+    }
+    SpkMdlSt *next(){
+        return NULL;
+    }
+};
+static SpkMdlStVecImpl g_DummySpkVec;
+static char g_AudizPath[MAX_PATH] = "../ioacases/dataCenter";
+static bool g_bUseRecSess = false;
+static SessionStruct *g_RecSess = NULL;
+
 static void initGlobal(BufferConfig &myBufCfg)
 {
     g_strIp = GetLocalIP();
     Config_getValue(&g_AutoCfg, "", "ifSkipSameProject", g_bSaveAfterRec);
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
+    Config_getValue(&g_AutoCfg, "", "ifUseRecSess", g_bUseRecSess);
+    Config_getValue(&g_AutoCfg, "", "audizCenterDataPath", g_AudizPath);
     Config_getValue(&g_AutoCfg, "bamp", "ifUseBAMP", g_bUseBamp);
     Config_getValue(&g_AutoCfg, "bamp", "reportBampThreshold", g_fReportBampThrd);
     Config_getValue(&g_AutoCfg, "bamp", "bampVadThreadNum", g_uBampVadNum);
@@ -221,28 +238,29 @@ int InitDLL(int iPriority,
     buffconfig.m_uBlocksMax = 20 * 600;
     initGlobal(buffconfig);
 
+    init_bufferglobal(buffconfig);
+    if(!ioareg_init()){
+        return 1;
+    }
+
     if(g_bUseBamp){
         if(!bamp_init(reportBampResultSeg, g_uBampVadNum, g_fAfterBampVadSecs)){
             LOG_INFO(g_logger, "fail to initailize bamp engine.");
             return 1;
         }
-    }
-
-    init_bufferglobal(buffconfig);
-    if(!ioareg_init()){
-        return 1;
-    }
-    {
-		pthread_attr_t threadAttr;
-		pthread_attr_init(&threadAttr);
-        pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-        pthread_t bmThdId;
-        int retc = pthread_create(&bmThdId, &threadAttr, bampMatchThread, NULL);
-        if(retc != 0){
-            LOG_ERROR(g_logger, "fail to create BampMatch thread!");
-            exit(1);
+        {
+            pthread_attr_t threadAttr;
+            pthread_attr_init(&threadAttr);
+            pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
+            pthread_t bmThdId;
+            int retc = pthread_create(&bmThdId, &threadAttr, bampMatchThread, NULL);
+            if(retc != 0){
+                LOG_ERROR(g_logger, "fail to create BampMatch thread!");
+                exit(1);
+            }
+            pthread_attr_destroy(&threadAttr);
         }
-		pthread_attr_destroy(&threadAttr);
+
     }
 
     if(true)
@@ -259,6 +277,9 @@ int InitDLL(int iPriority,
 		pthread_attr_destroy(&threadAttr);
     }
 
+    if(g_bUseRecSess){
+        g_RecSess = new SessionStruct(g_AudizPath, NULL, &g_DummySpkVec);
+    }
     g_bInitialized = true;
     return 0;
 }
@@ -279,6 +300,13 @@ int SendData2DLL(WavDataUnit *p)
     prj.data = p->m_pData;
     prj.len = p->m_iDataLen;
     recvProjSegment(prj, !g_bDiscardable, true);
+    if(g_bUseRecSess != NULL){
+        Audiz_WaveUnit unit;
+        unit.m_iPCBID = prj.pid;
+        unit.m_iDataLen = prj.len;
+        unit.m_pData = prj.data;
+        g_RecSess->writeData(&unit);
+    }
     string output = clockoutput_end();
     LOGFMTT(output.c_str());
 

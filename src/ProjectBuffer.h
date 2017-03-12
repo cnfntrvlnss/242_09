@@ -108,7 +108,7 @@ public:
     bool relse(std::vector<DataBlock>& retArr);
     void getData(std::vector<DataBlock>& vec);
     unsigned getDataLength();
-    bool isFull(time_t curTime = 0);
+    bool isFull(time_t curTime, time_t& nextTime);
     bool getFull(){
         AutoLock lock(m_BufferLock);
         return bFull;
@@ -205,6 +205,7 @@ struct ProjectSegment{
     char *data;
     unsigned len;
 };
+void getBufferStatus(std::string &outstr);
 bool init_bufferglobal(BufferConfig buffConfig);
 void rlse_bufferglobal();
 extern "C" void notifyProjFinish(unsigned long pid);

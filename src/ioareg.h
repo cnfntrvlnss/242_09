@@ -26,6 +26,7 @@ extern const unsigned int g_uVADID;
 extern const unsigned int g_uMusicType;
 extern const unsigned int g_uMusicID;
 
+extern LoggerId g_StatusLogger;
 extern std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
 
 extern bool g_bSaveAfterRec;

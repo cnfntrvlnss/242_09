@@ -10,6 +10,7 @@
 #include<iostream>
 #include <map>
 #include <queue>
+#include <string>
 using namespace std;
 
 #include "MusicDetect.h"
@@ -23,7 +24,7 @@ struct RecogThreadSpace{
         result.m_iDataUnitNum = 1;
         result.m_pDataUnit[0] = &projData;
         accntTotalCnt = 0;
-        accntTotalBytes = 0;
+        accntTotalSecs = 0;
     }
     ~RecogThreadSpace(){
     }
@@ -38,18 +39,18 @@ struct RecogThreadSpace{
     short *mcutBuf;
     unsigned mcutBufLen;
     unsigned long accntTotalCnt;
-    unsigned long accntTotalBytes;
+    unsigned long accntTotalSecs;
     LockHelper lock;
     void addAccnt(){
         lock.lock();
         accntTotalCnt ++;
-        accntTotalBytes += projData.m_iDataLen;
+        accntTotalSecs += projData.m_iDataLen / 16000;
         lock.unLock();
     }
     void getAccnt(unsigned long& prjcnt, unsigned long& bytecnt){
         lock.lock();
         prjcnt = accntTotalCnt;
-        bytecnt = accntTotalBytes;
+        bytecnt = accntTotalSecs;
         lock.unLock();
     }
 private:
@@ -253,6 +254,23 @@ void ioareg_maintain_procedure(time_t curTime)
         if(g_AutoCfg.checkAndLoad()){
             ioareg_updateConfig();
         }
+    }
+    static time_t statuslasttime;
+    if(curTime > 60 + statuslasttime){
+        statuslasttime = curTime;
+        char sztable[1024];
+        unsigned curlen = 0;
+        curlen += sprintf(sztable + curlen, "");
+        for(short idx=0; idx < g_ThreadNum; idx++){
+            unsigned long totalcnt, totalsecs;
+            g_RecSpaceArr[idx].getAccnt(totalcnt, totalsecs);
+            curlen += sprintf(sztable + curlen, "threadIdx: %d    totalcnt: %u    totalsecs: %u\n", idx, totalcnt, totalsecs);
+        }
+        LOGFMT_INFO(g_StatusLogger, "*************ioareg status*************\n%s", sztable);
+        string statStr;
+        getBufferStatus(statStr);
+        LOGFMT_INFO(g_StatusLogger, "*************projectbuffer status*************\n%s", statStr.c_str());
+
     }
 }
 bool ioareg_init()
@@ -575,7 +593,7 @@ string timelid;
         int nMax;
         float score;
         LOG_TRACE(g_logger, "LIDREG before scoreTLI, save raw pcm in "<< saveTempBinaryData(rec.curTime, pid, reinterpret_cast<char*>(recBuf), recBufLen * sizeof(short)));
-clockoutput_start("ScoreLID %u", recBufLen);
+clockoutput_start("ScoreLID RecLen %u", recBufLen);
         scoreTLI_dup(hTLI, recBuf, recBufLen, nMax, score);
 timelid = clockoutput_end();
         if(checkAndSetLidResSt(rec.result, nMax, score)){
@@ -583,7 +601,7 @@ timelid = clockoutput_end();
         }
         break;
     }
-    LOGFMTT("%s %s", clockoutput_end().c_str(), timelid.c_str());
+    LOGFMTD("%s %s", clockoutput_end().c_str(), timelid.c_str());
     LOG_INFO(g_logger, WriteLog<< "eop.");
 }
 
@@ -759,17 +777,28 @@ void* IoaRegThread(void *param)
         hVAD = openOneVAD(szLIDVADCfg);
         assert(hVAD != -1);
     }
-    ProjectBuffer *ptrBuf;
+    ProjectBuffer *ptrBuf = NULL;
+	bool bfirst = true;
+    curPid = 0;
 	while (true)
-	{
+    {
+
+        if(!bfirst){
+            if(ptrBuf != NULL){
+                LOGFMTD("PID=%lu %s.", curPid, clockoutput_end().c_str());
+            }
+        }
+        bfirst = false;
+        clockoutput_start("RecThread %d CLOCK_RECORD of one loop ", This_Buf.threadIdx);
+
         ptrBuf = obtainFullBufferTimeout(-1u);
         gettimeofday(&cur_time, NULL);
-		if (ptrBuf != NULL)
-		{
+        if (ptrBuf != NULL)
+        {
             ptrBuf->startMainReg();
             vector<DataBlock> datavec;
             assert(datavec.size() == 0);
-			ptrBuf->getData(datavec);
+            ptrBuf->getData(datavec);
             prepare_rec_bufs(datavec, &This_Buf);
 
             curPid = ptrBuf->ID;
@@ -777,11 +806,11 @@ void* IoaRegThread(void *param)
             This_Buf.result.m_iTargetID = 0;
             This_Buf.result.m_iAlarmType = 0;
             This_Buf.curTime = cur_time;
-			//for TLI
-			if(g_bUseLid)
-			{
+            //for TLI
+            if(g_bUseLid)
+            {
                 lidRegProcess(This_Buf, hTLI);
-			}
+            }
 
             if(g_bUseMusicDetect){
                 musicProcess(This_Buf);
@@ -794,24 +823,24 @@ void* IoaRegThread(void *param)
                 spkRegProcess(This_Buf);   
             }
             /*
-            if(g_bUseBamp && ptrBuf->getBampHit()){
-                char savedfile[MAX_PATH];
-                gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, ptrBuf->getPrjTime().tv_sec, ptrBuf->ID, NULL, NULL, NULL);
-                if(!saveWave(This_Buf.projData.m_pData, This_Buf.projData.m_iDataLen, savedfile)){
-                    LOGFMT_WARN(g_logger, "in IoaRegThread failed to write wave to file %s.", savedfile);
-                }
-                else{
-                    LOGFMT_TRACE(g_logger, "PID=%lu SavedPath=%s have saved project pointed by bamp match.", ptrBuf->ID, savedfile);
-                }
-            }
-            */
+               if(g_bUseBamp && ptrBuf->getBampHit()){
+               char savedfile[MAX_PATH];
+               gen_spk_save_file(savedfile, m_TSI_SaveTopDir, NULL, ptrBuf->getPrjTime().tv_sec, ptrBuf->ID, NULL, NULL, NULL);
+               if(!saveWave(This_Buf.projData.m_pData, This_Buf.projData.m_iDataLen, savedfile)){
+               LOGFMT_WARN(g_logger, "in IoaRegThread failed to write wave to file %s.", savedfile);
+               }
+               else{
+               LOGFMT_TRACE(g_logger, "PID=%lu SavedPath=%s have saved project pointed by bamp match.", ptrBuf->ID, savedfile);
+               }
+               }
+               */
             This_Buf.addAccnt();
             //保存节目号，用于后面的去重.
-			if(g_bSaveAfterRec){
-				pthread_mutex_lock(&g_lockNewReported);
-				NewReportedID.insert(map<unsigned long,ProjRecord_t>::value_type(curPid, ProjRecord_t("", cur_time.tv_sec)));
-				pthread_mutex_unlock(&g_lockNewReported);
-			}
+            if(g_bSaveAfterRec){
+                pthread_mutex_lock(&g_lockNewReported);
+                NewReportedID.insert(map<unsigned long,ProjRecord_t>::value_type(curPid, ProjRecord_t("", cur_time.tv_sec)));
+                pthread_mutex_unlock(&g_lockNewReported);
+            }
             //保存节目数据. --- for debug.
             pthread_mutex_lock(&g_AllProjsDirLock);
             size_t tmpLen = strlen(g_szAllPrjsDir);
@@ -825,14 +854,14 @@ void* IoaRegThread(void *param)
             else{
                 pthread_mutex_unlock(&g_AllProjsDirLock);
             }
-            
+
             release_rec_bufs();
             ptrBuf->finishMainReg();
-			returnBuffer(ptrBuf);
-		}
-		else{
-		}
-	}
+            returnBuffer(ptrBuf);
+        }
+        else{
+        }
+    }
 
     if(g_bUseLid) closeTLI_dup(hTLI);
     free(param);
