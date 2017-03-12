@@ -508,6 +508,10 @@ static void transferIDs(time_t curTime)
     g_PrevFullIDsLocker.unLock();
 }
 
+static void unlockLocker(LockHelper *locker)
+{
+    locker->unLock();
+}
 static LockHelper g_ObtainFullLocker;
 /**
  * 当存在多个project时，保证多次调用会返回所有的project.
@@ -515,12 +519,20 @@ static LockHelper g_ObtainFullLocker;
  */
 ProjectBuffer* obtainFullBufferTimeout(unsigned secs)
 {
-    AutoLock mylock(g_ObtainFullLocker);// only one thread do the checking.
+    ProjectBuffer *ret = NULL;
+    g_ObtainFullLocker.lock();
+    pthread_cleanup_push(reinterpret_cast<void(*)(void*)>(unlockLocker), &g_ObtainFullLocker);
+    pthread_testcancel();
     g_ProjsIDsLocker.lock();
     time_t endTime = 0;
     while(g_liFullIDs.size() == 0){
         time_t curTime = time(NULL);
-        if(endTime == 0) endTime += curTime;
+        if(endTime == 0){
+            endTime = curTime + secs;
+            if(endTime < curTime){
+                endTime = curTime  + 3600 * 24;
+            }
+        }
         transferIDs(curTime);
         if(curTime >= endTime) break;
         struct timespec tsp;
@@ -528,14 +540,14 @@ ProjectBuffer* obtainFullBufferTimeout(unsigned secs)
         tsp.tv_sec += 1;//one circle per second.
         pthread_cond_timedwait(&g_ProjsFullCond, &g_ProjsIDsLocker._crit, &tsp);
     }
-    if(g_liFullIDs.size() == 0){
-        g_ProjsIDsLocker.unLock();
-        return NULL;
+
+    if(g_liFullIDs.size() > 0){
+        //transfer the returned from liFullIds to postFullIds.
+        ret = g_liFullIDs.front().prj;
+        g_liFullIDs.pop_front();
     }
-    //transfer the returned from liFullIds to postFullIds.
-    ProjectBuffer *ret = g_liFullIDs.front().prj;
-    g_liFullIDs.pop_front();
     g_ProjsIDsLocker.unLock();
+    pthread_cleanup_pop(1);
 
     /*
     g_PostFullIDsLocker.lock();

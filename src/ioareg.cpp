@@ -356,6 +356,7 @@ if(g_bSpkUseMCut){
 	{
 		pthread_attr_t threadAttr;
 		pthread_attr_init(&threadAttr);
+        //TODO why specify stack size.
 		pthread_attr_setstacksize(&threadAttr, 2080 * 1024); // 120*1024
 		//pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
         g_RecSpaceArr[i].threadIdx = i;
@@ -756,8 +757,6 @@ static void prepare_rec_bufs(const vector<DataBlock> &datavec,
     }
 }
 
-
-
 void* IoaRegThread(void *param)
 {
     RecogThreadSpace &This_Buf = *(RecogThreadSpace*)param;
@@ -778,17 +777,9 @@ void* IoaRegThread(void *param)
         assert(hVAD != -1);
     }
     ProjectBuffer *ptrBuf = NULL;
-	bool bfirst = true;
     curPid = 0;
 	while (true)
     {
-
-        if(!bfirst){
-            if(ptrBuf != NULL){
-                LOGFMTD("PID=%lu %s.", curPid, clockoutput_end().c_str());
-            }
-        }
-        bfirst = false;
         clockoutput_start("RecThread %d CLOCK_RECORD of one loop ", This_Buf.threadIdx);
 
         ptrBuf = obtainFullBufferTimeout(-1u);
@@ -858,8 +849,10 @@ void* IoaRegThread(void *param)
             release_rec_bufs();
             ptrBuf->finishMainReg();
             returnBuffer(ptrBuf);
+            LOGFMTD("PID=%lu %s.", curPid, clockoutput_end().c_str());
         }
         else{
+            LOGFMTD("Project is NULL %s.", clockoutput_end().c_str());
         }
     }
 
