@@ -14,27 +14,35 @@
 
 class SpkInfo{
 public:
-    SpkInfo(unsigned long param = 0):
+    explicit SpkInfo(unsigned long param = 0):
         spkId(param)
     {}
-    SpkInfo(const char* param){
+    explicit SpkInfo(const char* param):
+    {
         fromStr(param);
     }
     virtual ~SpkInfo(){
     }
     virtual std::string toStr() const;
     virtual bool fromStr(const char* );
+    /*
     virtual bool operator==(const SpkInfo& oth) const{
         if(typeid(oth) != typeid(*this)) return false;
         return this->spkId == oth.spkId;
     }
+    */
 public:
     unsigned long spkId;
+    short int refcnt;
 };
 
-void spkex_getAllSpks(std::vector<const SpkInfo*> &outSpks);
-bool spkex_addSpk(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo* &oldSpk);
-const SpkInfo* spkex_rmSpk(const SpkInfo* spk);
+//unsigned spkex_getAllSpks(std::vector<const SpkInfo*> &spks);
+unsigned spkex_getAllSpks(std::vector<unsigned long> &spkIds);
+const SpkInfo* getSpk(unsigned long);
+void returnSpk(const SpkInfo*);
+bool spkex_addSpk(SpkInfo* spk, char* mdlData, unsigned mdlLen);
+//bool spkex_rmSpk(const SpkInfo* spk, const SpkInfo* oldSpk);
+bool spkex_rmSpk(unsigned long spkId);
 bool spkex_init(const char* cfgfile);
 void spkex_rlse();
 int spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score);

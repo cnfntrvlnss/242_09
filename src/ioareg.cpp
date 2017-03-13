@@ -88,7 +88,7 @@ bool g_bUseSpk = true;
 static bool g_bSpkUseVad = true;
 static bool g_bSpkUseMCut = true;
 extern float defaultSpkScoreThrd;
-static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
+//static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
 
 bool addSpkPerFile(const char* szDir, const char* filename)
 {
@@ -132,6 +132,7 @@ bool addSpkPerFile(const char* szDir, const char* filename)
     return ret;
 }
 
+/*
 static void checkAllPendingSpks()
 {
     while(g_PendingDeleteSpks.size() > 0){
@@ -167,6 +168,7 @@ void delayrm_spkObj(const SpkInfoChd *spk)
     }
     g_PendingDeleteSpks.push(make_pair(spk, spkSnap));
 }
+*/
 
 typedef struct{
 	float m_0Value;

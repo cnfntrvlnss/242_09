@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 #include <list>
+#include <map>
+#include <set>
 using namespace std;
 
 #include "spkEngine.h"
@@ -60,6 +62,7 @@ public:
     bool operator==(const SpkInfo& oth) const;
 };
 
+/*
 bool SpkInfoEx::operator==(const SpkInfo& oth) const{
     if(typeid(*this) != typeid(oth)){
         return false;
@@ -67,8 +70,21 @@ bool SpkInfoEx::operator==(const SpkInfo& oth) const{
     const SpkInfoEx& refOth = static_cast<const SpkInfoEx&>(oth);
     return SpkInfo::operator==(oth) && flag == refOth.flag;
 }
-vector<const SpkInfo*> g_vecSpkInfoPtr;
-vector<void*> g_vecSpeakerModel;
+*/
+//vector<const SpkInfo*> g_vecSpkInfoPtr;
+
+struct SpkCheckBook{
+    explicit SpkCheckBook(SpkInfo* s=NULL, int i=-1):
+        spk(s), idx(i)
+    {}
+    SpkInfo *spk;
+    int idx;
+    set<SpkInfo*> oldSpks;
+};
+
+vector<void*> g_vecSpeakerModels;
+vector<unsigned long> g_vecSpeakerIDs;
+map<unsigned long, SpkCheckBook > g_mapAllSpks;
 float defaultSpkScoreThrd = 0.0;
 pthread_rwlock_t g_SpkInfoRwlock = PTHREAD_RWLOCK_INITIALIZER;
 
@@ -98,14 +114,14 @@ void spkex_getAllSpks(vector<const SpkInfo*> &outSpks)
 {
     SLockHelper mylock(&g_SpkInfoRwlock, false);
     outSpks.clear();
-    outSpks.insert(outSpks.begin(), g_vecSpkInfoPtr.begin(), g_vecSpkInfoPtr.end());
+    for(unsigned idx=0; idx < g_vecSpeakerIDs.size(); idx++){
+        outSpks.push_back(g_mapAllSpks[g_vecSpeakerIDs[idx]].spk);
+    }
 }
 
-bool spkex_addSpk(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkInfo*& oldSpk)
+bool spkex_addSpk(SpkInfo* spk, char* mdlData, unsigned mdlLen)
 {
-    oldSpk = NULL;
     SLockHelper mylock(&g_SpkInfoRwlock);
-    assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
     string mdlpath = g_strSpkMdlDir + spk->toStr();
     TITStatus err = TIT_SPKID_SAVE_MDL_IVEC(mdlData, mdlpath.c_str());
     if(err != StsNoError){
@@ -118,48 +134,65 @@ bool spkex_addSpk(const SpkInfo* spk, char* mdlData, unsigned mdlLen, const SpkI
         SLOGE_FMT("in addSpeaker, failed to load model from file. file=%s; error: %d.", mdlpath.c_str(), err);
         return false;
     }
-    size_t idx=0;
-    for(; idx < g_vecSpkInfoPtr.size(); idx ++){
-        if(*spk == *g_vecSpkInfoPtr[idx]){
-            break;
+
+    const unsigned long &spkId = spk->spkId;
+    int spkIdx = -1;
+    if(g_mapAllSpks.find(spkId) != g_mapAllSpks.end()){
+        SpkInfo *oldSpk = g_mapAllSpks[spkId].spk;
+        if(oldSpk != NULL){
+            spkIdx = g_mapAllSpks[spkId].idx;
+            TIT_SPKID_DEL_MDL(g_vecSpeakerModels[spkIdx]);
+        }
+        if(oldSpk != spk){
+            if(oldSpk->refcnt > 0){
+                g_mapAllSpks[spkId].oldSpks.insert(oldSpk);   
+            }
+            else{
+                delete oldSpk;
+            }
         }
     }
-    if(idx != g_vecSpkInfoPtr.size()){
-        err = TIT_SPKID_DEL_MDL(g_vecSpeakerModel[idx]);
-        oldSpk = g_vecSpkInfoPtr[idx];
-    }
     else{
-        g_vecSpkInfoPtr.resize(idx + 1, NULL);
-        g_vecSpeakerModel.resize(idx + 1, NULL);
+        spkIdx = g_vecSpeakerModels.size();
+        g_mapAllSpks.insert(make_pair(spkId, SpkCheckBook(spk, spkIdx)));
+        g_vecSpeakerModels.push_back(NULL);
+        g_vecSpeakerIDs.push_back(spkId);
     }
-    g_vecSpkInfoPtr[idx] = spk;
-    g_vecSpeakerModel[idx] = pData;
+    g_vecSpeakerModels[spkIdx] = pData;
     return true;
 }
 
-const SpkInfo* spkex_rmSpk(const SpkInfo* spk)
+bool spkex_rmSpk(unsigned long spkId)
 {
     SLockHelper mylock(&g_SpkInfoRwlock);
-    assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
-    size_t idx=0;
-    for(; idx < g_vecSpkInfoPtr.size(); idx++){
-        if(*spk == *g_vecSpkInfoPtr[idx]) break;       
+    if(g_mapAllSpks.find(spkId) != g_mapAllSpks.end() && g_mapAllSpks[spkId].spk != NULL){
+        SpkInfo *&delSpk = g_mapAllSpks[spkId].spk;
+        int spkIdx = g_mapAllSpks[spkId].idx;
+        set<SpkInfo*> oldSpks = g_mapAllSpks[spkId].oldSpks;
+        if(delSpk->refcnt == 0){
+            delete delSpk;
+        }
+        else{
+            oldSpks.insert(delSpk);
+        }
+        delSpk = NULL;
+        if(oldSpks.size() == 0){
+            g_mapAllSpks.erase(spkId);
+        }
+        TIT_SPKID_DEL_MDL(g_vecSpeakerModels[spkIdx]);
+        g_vecSpeakerModels.erase(g_vecSpeakerModels.begin() + spkIdx);
+        g_vecSpeakerIDs.erase(g_vecSpeakerIDs.begin() + spkIdx);
     }
-    if(idx == g_vecSpkInfoPtr.size()){
-        SLOGW_FMT("in removeSpeaker, no spk found in spk array. spk: %s.\n", spk->toStr().c_str());
-        return NULL;
+    else{
+        SLOGW_FMT("in removeSpeaker, no spk found in spk array. spk: %d.", spkId);
     }
+    return true;
+}
 
-    const SpkInfo* delSpk = g_vecSpkInfoPtr[idx];
-    void * delModel = g_vecSpeakerModel[idx];
-    g_vecSpkInfoPtr.erase(g_vecSpkInfoPtr.begin() + idx);
-    g_vecSpeakerModel.erase(g_vecSpeakerModel.begin() + idx);
-    TIT_SPKID_DEL_MDL(delModel);
-    string mdlpath = g_strSpkMdlDir + spk->toStr();
-    if(remove(mdlpath.c_str()) == -1){
-        SLOGW_FMT("in removeSpeaker, fail to remove persistent file. file: %s.\n", mdlpath.c_str());
-    }
-    return delSpk;
+unsigned spkex_getAllSpks(std::vector<unsigned long> &spkIds)
+{
+    spkIds.clear();
+
 }
 
 bool spkex_init(const char* cfgfile)
@@ -175,6 +208,7 @@ bool spkex_init(const char* cfgfile)
 
 void spkex_rlse()
 {
+
     SLockHelper mylock(&g_SpkInfoRwlock);
     assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
     for(size_t idx=0; idx < g_vecSpkInfoPtr.size(); idx++){
