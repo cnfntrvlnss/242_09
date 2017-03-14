@@ -3,19 +3,23 @@ CC=gcc
 CCC=g++
 CXX=g++
 
-PROGRAM := spktest
-CPPSRCS:= ../src/spkmain/spktest.cpp ../src/utilites.cpp ../src/spk_ex.cpp ../src/MusicDetect_dup.cpp
+BDIR:=buildSpk
+CONF:=Debug
+BDIR:=$(BDIR)/$(CONF)/
+TDIR:=../test09/ioacas/
+#PROGRAM:=$(TDIR)/$(PROGRAM)
+
+SPKTEST := spktest
+TEST_CPPSRCS:= ../src/spkmain/spktest.cpp ../src/utilites.cpp ../src/spk_ex.cpp #../src/MusicDetect_dup.cpp
+TEST_CPPOBJS:=$(addprefix $(BDIR),$(notdir $(patsubst %.cpp,%.o,$(TEST_CPPSRCS))))
+
+CPPSRCS:=${TEST_CPPSRCS}
 CSRCS:=
-BDIR:=build$(PROGRAM)
 COBJS:= 
-CPPOBJS:= 
+CPPOBJS:= ${TEST_CPPOBJS}
 CPRES:= 
 CPPPRES:=
 
-CONF:=Debug
-BDIR:=$(BDIR)/$(CONF)
-TDIR:=../test09/ioacas
-PROGRAM:=$(TDIR)/$(PROGRAM)
 
 ifeq (Debug,$(CONF))
 CPPFLAGS+=-g -Wall
@@ -23,10 +27,13 @@ else
 CPPFLAGS+=-O2 -Wall
 endif
 
-LDLIBS+=-lpthread -L$(TDIR) -lSpeakerRecogAPI -lMusicDetect -ldllSRVADCluster -lTLI_API -Wl,-rpath-link=$(TDIR)
+LDLIBS+=-lpthread  -ldl -L$(TDIR) -lFrontEnd -lSpkAPI -Wl,-rpath-link=$(TDIR)
 
 .PHONY: all
-all: ${PROGRAM}
+all: $(TDIR)${SPKTEST}
+
+${TDIR}${SPKTEST}: ${TEST_CPPOBJS}
+	${CCC} -o $@ $^ ${LDLIBS} 
 
 define CPRE_template
 CPRETMP:=$(BDIR)/$(notdir $(1:.c=.d))
@@ -40,28 +47,25 @@ endef
 $(foreach csrc, $(CSRCS), $(eval $(call CPRE_template, $(csrc))))
 
 define CPPPRE_template
-CPPPRETMP:=$(BDIR)/$(notdir $(1:.cpp=.d))
-CPPOBJS += $$(CPPPRETMP:.d=.o)
+CPPPRETMP:=$(BDIR)$(notdir $(1:.cpp=.d))
+#CPPOBJS += $$(CPPPRETMP:.d=.o)
 CPPPRES += $$(CPPPRETMP)
 $$(CPPPRETMP): $(1)
 	mkdir -p $(BDIR)
 	set -e; $$(CC) -MM $$< | \
-	sed 's,\($$(notdir $$(@:.d=.o))\)[ ]*:,$(BDIR)/\1 $$@ :,' > $$@
+	sed 's,\($$(notdir $$(@:.d=.o))\)[ ]*:,$(BDIR)\1 $$@ :,' > $$@
 endef
 $(foreach cppsrc, $(CPPSRCS), $(eval $(call CPPPRE_template, $(cppsrc))))
 
+$(info zsr debug: $(CPPPRES))
 include $(CPRES) $(CPPPRES)
 
-
-${CPPOBJS}: %.o:
+${CPPOBJS}:
 	$(COMPILE.cc) $< -o $@
 
 ${COBJS}: %.o:
 	$(COMPILE.c) $< -o $@
 
-
-${PROGRAM}: ${CPPOBJS} ${COBJS}
-	${CCC} -o $@ $^ ${LDLIBS} 
 
 
 

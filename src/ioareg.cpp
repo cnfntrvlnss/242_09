@@ -83,17 +83,45 @@ void* IoaRegThread(void *param);
 ///////////////////---spk---
 static char szSpkMscCfg[MAX_PATH] = "./ioacas/Music.cfg";
 static char szSpkVADCfg[MAX_PATH] = "./ioacas/VAD_SID.cfg";
-static char szSpkCfgFile[MAX_PATH] = "./ioacas/runSpk.cfg";
+static char szSpkCfgFile[MAX_PATH] = "./ioacas/SpkSRE.cfg";
 bool g_bUseSpk = true;
-static bool g_bSpkUseVad = true;
-static bool g_bSpkUseMCut = true;
+static bool g_bSpkUseVad = false;
+static bool g_bSpkUseMCut = false;
 extern float defaultSpkScoreThrd;
 //static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
+
+bool SpkInfoChd::fromStr(const char* strSpk){
+    istringstream iss(strSpk);
+    char chSep;
+    if(!(iss >> this->spkId)) return false;
+    if(!(iss.get(chSep) || chSep != '_')) return false;
+    int retval = iss.peek();
+    if(retval == EOF) return false;
+    int servtype;
+    if(retval == '0'){
+        char tmpch;
+        iss.get(tmpch);
+        iss.get(tmpch);
+        if(tmpch != 'x' && tmpch != 'X') return false;
+        if(!(iss >> std::hex>> servtype>> std::dec)) return false;
+    }
+    else{
+        if(!(iss >> servtype)) return false;
+    }
+    this->servType = servtype;
+    if(!(iss.get(chSep) || chSep != '_')) return false;
+    if(!(iss >> harmLevel)) return false;
+    return true;
+}
 
 bool addSpkPerFile(const char* szDir, const char* filename)
 {
     SpkInfoChd *spk = new SpkInfoChd();
     if(!spk->fromStr(filename)){
+        delete spk;
+        return false;
+    }
+    if(spk->servType != 0x92){
         delete spk;
         return false;
     }
@@ -113,12 +141,7 @@ bool addSpkPerFile(const char* szDir, const char* filename)
     size_t retr = fread(mdlData, 1, mdlLen, fp);
     bool ret = false;
     if(retr == mdlLen){
-        const SpkInfo* oldSpk;
-        bool retspkex = spkex_addSpk(spk, mdlData, mdlLen, oldSpk);
-        if(oldSpk){
-            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(oldSpk));
-        }
-        if(!retspkex){
+        if(!spkex_addSpk(spk, mdlData, mdlLen)){
             LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed in spkex_addSpk, filepath: %s", filePath.c_str());
         }
         else{
@@ -129,46 +152,11 @@ bool addSpkPerFile(const char* szDir, const char* filename)
         LOGFMT_ERROR(g_logger, "in addSpkPerFile, failed to read file: %s, real: %u; read: %u.", filePath.c_str(), mdlLen, retr);
     }
     delete []mdlData;
+    if(!ret){
+        delete spk;
+    }
     return ret;
 }
-
-/*
-static void checkAllPendingSpks()
-{
-    while(g_PendingDeleteSpks.size() > 0){
-        map<pthread_t, unsigned long>& spkSnap = g_PendingDeleteSpks.front().second;
-        size_t jdx = 0;
-        for(; jdx < g_ThreadNum; jdx++){
-            unsigned long cnt, cnt1; 
-            g_RecSpaceArr[jdx].getAccnt(cnt, cnt1);
-            assert(spkSnap.find(g_RecSpaceArr[jdx].threadId) != spkSnap.end());
-            if(spkSnap[g_RecSpaceArr[jdx].threadId] == cnt) break;
-        }
-        if(jdx == g_ThreadNum){
-            LOG_DEBUG(g_logger, "in checkAllPendingSpks, delete spk with no use, spk: "<< g_PendingDeleteSpks.front().first);
-            delete g_PendingDeleteSpks.front().first;
-            g_PendingDeleteSpks.pop();
-        }
-        else{
-            break;
-        }
-    }
-}
-
-void delayrm_spkObj(const SpkInfoChd *spk)
-{
-    checkAllPendingSpks();
-    if(spk == NULL){
-        return;
-    }
-    map<pthread_t, unsigned long > spkSnap;
-    for(size_t idx=g_ThreadNum - 1; idx >= 0; idx++){
-        unsigned long cnt1;
-        g_RecSpaceArr[idx].getAccnt(spkSnap[g_RecSpaceArr[idx].threadId], cnt1);
-    }
-    g_PendingDeleteSpks.push(make_pair(spk, spkSnap));
-}
-*/
 
 typedef struct{
 	float m_0Value;
@@ -200,30 +188,6 @@ TransScore getScoreFunc(ScoreConfig *param)
 }
 
 
-bool SpkInfoChd::fromStr(const char* strSpk){
-    istringstream iss(strSpk);
-    char chSep;
-    if(!(iss >> this->spkId)) return false;
-    if(!(iss.get(chSep) || chSep != '_')) return false;
-    int retval = iss.peek();
-    if(retval == EOF) return false;
-    int servtype;
-    if(retval == '0'){
-        char tmpch;
-        iss.get(tmpch);
-        iss.get(tmpch);
-        if(tmpch != 'x' && tmpch != 'X') return false;
-        if(!(iss >> std::hex>> servtype>> std::dec)) return false;
-    }
-    else{
-        if(!(iss >> servtype)) return false;
-    }
-    this->servType = servtype;
-    if(!(iss.get(chSep) || chSep != '_')) return false;
-    if(!(iss >> harmLevel)) return false;
-    return true;
-}
-
 static void ioareg_updateConfig()
 {
     if(g_AutoCfg.isUpdated("lid", "savedMusicPrecent")){
@@ -246,6 +210,76 @@ static void ioareg_updateConfig()
         }
         pthread_mutex_lock(&g_AllProjsDirLock);
     }
+}
+
+
+static void operate_spklib_offline()
+{
+	string transdir = "ioacas/SpkModelTrans/";
+	string taskfile = transdir + "tasklist";
+	FILE * taskfd = fopen(taskfile.c_str(), "r");
+	if(taskfd == NULL){
+		return ;
+	}
+	char tmpline[512];
+	char *taskstr, *modelname;
+	while(fgets(tmpline, 512, taskfd) != NULL){
+		taskstr = strtok(tmpline, " \t\n");
+		modelname = strtok(NULL, " \t\n");
+		if(taskstr == NULL || modelname == NULL) {
+			LOGFMT_WARN(g_logger, "operate_spklib_offline fails to parse task in %s", tmpline);
+			continue;
+		}
+		if(strcmp(taskstr, "add")==0){
+			//parse information of the added speaker from the 2 and 3 tokens.
+			const char *thdstr = strtok(NULL, " \t\n");
+            if(thdstr != NULL){
+                 float thdf = atof(thdstr);   
+            }
+            SpkInfoChd* curspk = new SpkInfoChd();
+            if(!curspk->fromStr(modelname)){
+                delete curspk;
+				LOGFMT_WARN(g_logger, "operate_spklib_offline failed to parse modelname in %s", tmpline);
+                continue;
+            }
+			//read data from model file specified by the 2th token.
+			string modelfile = transdir + modelname;
+			FILE *mdfd = fopen(modelfile.c_str(), "rb");
+			if(mdfd == NULL){
+				LOGFMT_WARN(g_logger, "operate_spklib_offline failed to open file %s. errno: %s", modelfile.c_str(), strerror(errno));
+                delete curspk;
+				continue;
+			}
+			fseek(mdfd, 0, SEEK_END);
+			size_t modellen = ftell(mdfd);
+			fseek(mdfd, 0, SEEK_SET);
+            if(modellen == 0){
+                LOGFMT_WARN(g_logger, "operate_spklib_offline empty sample file %s.", modelfile.c_str());
+                delete curspk;
+                fclose(mdfd);
+                continue;
+            }
+			char *modeldata = (char*)malloc(modellen);
+			int retr = fread(modeldata, 1, modellen, mdfd);
+            if(!spkex_addSpk(curspk, modeldata, modellen)){
+                delete curspk;
+            }
+			free(modeldata);
+			fclose(mdfd);
+		}
+		else if(strcmp(taskstr, "remove") == 0){
+			unsigned speakid;
+			if(sscanf(modelname, "%u", &speakid) < 1){
+				LOGFMT_WARN(g_logger, "operate_spklib_offline failed to parse spkid in %s.", tmpline);
+				continue;
+			}
+            spkex_rmSpk(speakid);
+		}
+	}
+	int retrm = remove(taskfile.c_str());
+	if(retrm == -1){
+		LOGFMT_WARN(g_logger, "operate_spklib_offline failed to remove %s error: %s", taskfile.c_str(), strerror(errno));
+	}
 }
 
 void ioareg_maintain_procedure(time_t curTime)
@@ -370,11 +404,13 @@ if(g_bSpkUseMCut){
 		pthread_attr_destroy(&threadAttr);
 	}
 
+/*
 string g_strExtraSpkModelDir = "ioacas/OrigSpkModel";
 if(if_directory_exists(g_strExtraSpkModelDir.c_str())){
 	int retspkcfg = procFilesInDir(g_strExtraSpkModelDir.c_str(), addSpkPerFile);
 	LOGFMT_INFO(g_logger, "in ioareg_init, loading prepared spk models in %s, SPKCount=%d.", g_strExtraSpkModelDir.c_str(), retspkcfg);
 }
+*/
 
     return true;
 }
@@ -634,7 +670,7 @@ string timemusic, timevad, timespk;
             int tmpval = recBufLen;
             clockoutput_start("CutMusic %u", recBufLen);
             bool retmc = MusicCut(rec.threadIdx, recBuf, recBufLen, rec.mcutBuf, tmpval);
-timemusic = clockoutput_end();
+            timemusic = clockoutput_end();
             rec.mcutBufLen = tmpval;
             if(!retmc){ rec.mcutBufLen = 0; }
             recBuf = rec.mcutBuf;
@@ -648,9 +684,9 @@ timemusic = clockoutput_end();
         }
         if(g_bSpkUseVad){
             int tmpval = recBufLen;
-clockoutput_start("CutVAD %u", recBufLen);
+            clockoutput_start("CutVAD %u", recBufLen);
             bool retvad = VADBuffer(true, recBuf, recBufLen, rec.vadBuf, tmpval);
-timevad = clockoutput_end();
+            timevad = clockoutput_end();
             rec.vadBufLen = tmpval;
             if(!retvad) rec.vadBuf = 0;
             recBuf = rec.vadBuf;
@@ -679,6 +715,7 @@ timespk = clockoutput_end();
         res.m_iHarmLevel = rspk->harmLevel;
         res.m_fLikely = getScoreFunc(NULL)(score);
         res.m_fSegLikely[0] = res.m_fLikely;
+        returnSpkInfo(spk);
         reportIoacasResult(rec.result, WriteLog, logLen);
 
         break;

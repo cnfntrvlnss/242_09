@@ -13,8 +13,8 @@
 #include <string>
 #include <vector>
 
-#include "../dllSRVADCluster.h"
-#include "../MusicDetect_dup.h"
+//#include "../dllSRVADCluster.h"
+//#include "../MusicDetect_dup.h"
 #include "../utilites.h"
 #include "../spk_ex.h"
 
@@ -28,13 +28,16 @@ char *g_szAudioListFile = NULL;
 char *g_szResultListFile = NULL;
 char *g_szModelListFile = NULL;
 bool g_bDebugMode = false;
-#define DEBUG_LOG(FMT, ...) if(g_bDebugMode) fprintf(stderr, FMT"\n", ##__VA_ARGS__);
-#define ERROR_LOG(FMT, ...) fprintf(stderr, "ERROR "FMT"\n", ##__VA_ARGS__);
+#define DEBUG_LOG(FMT, ...) if(g_bDebugMode) fprintf(stderr, FMT "\n", ##__VA_ARGS__);
+#define ERROR_LOG(FMT, ...) fprintf(stderr, "ERROR " FMT "\n", ##__VA_ARGS__);
 
 class SpkInfoEx: public SpkInfo
 {
+    static unsigned long acculCnt;
 public:
-    SpkInfoEx(const char* param, char* buf = NULL, unsigned len = 0){
+    SpkInfoEx(const char* param, char* buf = NULL, unsigned len = 0):
+        SpkInfo(acculCnt ++)
+    {
         fname = param;
         size_t idx = fname.find_last_of('/');
         if(idx != string::npos){
@@ -49,17 +52,14 @@ public:
     bool fromStr(const char* param)
     {
         fname =param;
-    }
-    bool operator==(const SpkInfo& oth) const{
-        if(typeid(oth) != typeid(SpkInfoEx)) return false;
-        const SpkInfoEx& tmpOth = static_cast<const SpkInfoEx&>(oth);
-        return fname == tmpOth.fname;
+        return true;
     }
 
     string fname;
     char *mdData;
     unsigned mdLen;
 };
+unsigned long SpkInfoEx::acculCnt = 0;
 
 bool loadBinary2Buf(const char* path, char *pData, unsigned &iolen)
 {
@@ -86,7 +86,7 @@ bool loadBinary2Buf(const char* path, char *pData, unsigned &iolen)
         }
     }
     istm.close();
-    return true;
+    return ret;
     
 }
 bool loadBinaryFile(const char* path, char *&mdData, unsigned &mdLen)
@@ -101,9 +101,9 @@ bool loadBinaryFile(const char* path, char *&mdData, unsigned &mdLen)
     return true;
 }
 
-vector<const SpkInfoEx*> getallMdls(const char* listfile)
+vector<SpkInfoEx*> getallMdls(const char* listfile)
 {
-    vector<const SpkInfoEx*> ret;
+    vector<SpkInfoEx*> ret;
     vector<string> vecPath = loadFileList(listfile);
     for(size_t idx=0; idx < vecPath.size(); idx ++){
         char *mdData;
@@ -166,7 +166,7 @@ void parseGlobal(int argc, char *argv[])
     }
     if(g_szModelListFile == NULL){
         g_szModelListFile = new char[MAX_PATH];
-        snprintf(g_szModelListFile, MAX_PATH, "spkmdllist");
+        snprintf(g_szModelListFile, MAX_PATH, "modellist");
     }
     if(g_szResultListFile == NULL){
         g_szResultListFile = new char[MAX_PATH];
@@ -180,15 +180,16 @@ int main(int argc, char *argv[])
 {
     string sysdir = "ioacas/";
     parseGlobal(argc, argv);
-    vector<const SpkInfoEx*> vecSpks = getallMdls(g_szModelListFile);
+    vector<SpkInfoEx*> vecSpks = getallMdls(g_szModelListFile);
     if(vecSpks.size() == 0){
         ERROR_LOG("no spks being configured!!!");
         exit(1);
     }
     else{
-        DEBUG_LOG("finish loading spks, count: %u.", vecSpks.size());
+        DEBUG_LOG("finish loading spks, count: %lu.", vecSpks.size());
     }
 
+    /*
     if(!InitVADCluster((sysdir + "VAD_SID.cfg").c_str())){
         ERROR_LOG("fail to init vad.");
         exit(1);
@@ -199,12 +200,12 @@ int main(int argc, char *argv[])
         exit(1);
     }
     finishOpenMusicCut();
-    if(!spkex_init((sysdir + "runSpk.cfg").c_str())){
+    */
+    if(!spkex_init("SpkSRE.cfg")){
         exit(1);
     }
-    const SpkInfo* oldSpk = NULL;
     for(size_t idx = 0; idx < vecSpks.size(); idx++){
-        if(!spkex_addSpk(vecSpks[idx], vecSpks[idx]->mdData, vecSpks[idx]->mdLen, oldSpk)){
+        if(!spkex_addSpk(vecSpks[idx], vecSpks[idx]->mdData, vecSpks[idx]->mdLen)){
             ERROR_LOG("fail to add speaker. file: %s", vecSpks[idx]->fname.c_str());
             exit(1);
         }
@@ -233,8 +234,9 @@ int main(int argc, char *argv[])
             short* smpBuf = reinterpret_cast<short*>(pData);
             short *smpAddBuf1 = reinterpret_cast<short*>(addBuf1);
             short *smpAddBuf2 = reinterpret_cast<short*>(addBuf2);
+            uLogLen += snprintf(szLog + uLogLen, 1024, "DataSecs=%u ", smpLen / SC_PCMSMPS);
+            /*
             unsigned mcutLen = smpLen;
-            uLogLen += snprintf(szLog + uLogLen, 1024, "DataLen=%u ", smpLen / SC_PCMSMPS);
             if(!cutMusic(hMcut, smpBuf, smpLen, smpAddBuf1, mcutLen)){
                 break;
             }
@@ -244,18 +246,16 @@ int main(int argc, char *argv[])
             if(vadLen < VALID_PCMSMPS){
                 break;
             }
-
+            */
             const SpkInfo* tspk;
             float spkScore;
-            int retscr = spkex_score(smpAddBuf2, vadLen, tspk, spkScore);
+            int retscr = spkex_score(smpBuf, smpLen, tspk, spkScore);
             if(tspk == NULL){
                 if(retscr == 0) uLogLen += snprintf(szLog + uLogLen, 1024, " NO_SPK ");
             }
             else{
-                const SpkInfoEx* tspkex = static_cast<const SpkInfoEx*>(tspk);
-                string mdname = tspkex->fname;
-                mdname = getBasename(mdname.c_str());
-                uLogLen += snprintf(szLog + uLogLen, 1024, " SPKName=%s SPKScore=%0.2f ", mdname.c_str(), spkScore);
+                uLogLen += snprintf(szLog + uLogLen, 1024, " speaker=%s score=%0.2f ", tspk->toStr().c_str(), spkScore);
+                returnSpkInfo(tspk);
             }
             break;
         }
@@ -268,7 +268,9 @@ int main(int argc, char *argv[])
 
 exit_main:
     spkex_rlse();
+    /*
     FreeVADCluster();
     closeMusicCut(hMcut);
+    */
 }
 

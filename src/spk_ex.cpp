@@ -18,12 +18,51 @@
 #include <list>
 #include <map>
 #include <set>
+
+#include "TIT_SPKID_OFFL_API.h"
+
 using namespace std;
+#define SLOGE_FMT(fmt, ...) fprintf(stderr, "ERROR " fmt "\n", ##__VA_ARGS__)
+#define SLOGW_FMT(fmt, ...) fprintf(stderr, "WARN " fmt "\n", ##__VA_ARGS__)
 
-#include "spkEngine.h"
+struct RefCounterImpl: public RefCounter
+{
+    RefCounterImpl(){
+        cnt = 0;
+        pthread_mutex_init(&lock, NULL);
+    }
+    ~RefCounterImpl(){
+        pthread_mutex_destroy(&lock);
+    }
+    void incr(){
+        pthread_mutex_lock(&lock);
+        cnt ++;
+        pthread_mutex_unlock(&lock);
+    }
+    int decr(){
+        pthread_mutex_lock(&lock);
+        int ret = cnt --;
+        pthread_mutex_unlock(&lock);
+        return ret;
+    }
+    int get(){
+        pthread_mutex_lock(&lock);
+        int ret = cnt;
+        pthread_mutex_unlock(&lock);
+        return ret;
+    }
 
-#define SLOGE_FMT(fmt, ...) fprintf(stderr, "ERROR "fmt"\n", ##__VA_ARGS__)
-#define SLOGW_FMT(fmt, ...) fprintf(stderr, "WARN "fmt"\n", ##__VA_ARGS__)
+    pthread_mutex_t lock;
+    int cnt;
+private:
+    RefCounterImpl(const RefCounterImpl&);
+    RefCounterImpl& operator=(const RefCounterImpl&);
+};
+
+RefCounter* RefCounter::getInstance()
+{
+    return new RefCounterImpl();   
+}
 
 bool SpkInfo::fromStr(const char* param)
 {
@@ -82,13 +121,15 @@ struct SpkCheckBook{
     set<SpkInfo*> oldSpks;
 };
 
+static int g_FeatSize;
+static int g_ModelSize;
 vector<void*> g_vecSpeakerModels;
 vector<unsigned long> g_vecSpeakerIDs;
 map<unsigned long, SpkCheckBook > g_mapAllSpks;
-float defaultSpkScoreThrd = 0.0;
+static float defaultSpkScoreThrd = 0.0;
 pthread_rwlock_t g_SpkInfoRwlock = PTHREAD_RWLOCK_INITIALIZER;
 
-string g_strSpkMdlDir = "ioacas/SpkModel/";
+static string g_strSpkMdlDir = "ioacas/SpkModel/";
 
 class SLockHelper{
 public:
@@ -122,6 +163,7 @@ void spkex_getAllSpks(vector<const SpkInfo*> &outSpks)
 bool spkex_addSpk(SpkInfo* spk, char* mdlData, unsigned mdlLen)
 {
     SLockHelper mylock(&g_SpkInfoRwlock);
+    /*
     string mdlpath = g_strSpkMdlDir + spk->toStr();
     TITStatus err = TIT_SPKID_SAVE_MDL_IVEC(mdlData, mdlpath.c_str());
     if(err != StsNoError){
@@ -134,17 +176,24 @@ bool spkex_addSpk(SpkInfo* spk, char* mdlData, unsigned mdlLen)
         SLOGE_FMT("in addSpeaker, failed to load model from file. file=%s; error: %d.", mdlpath.c_str(), err);
         return false;
     }
+    */
 
+    char *pData = (char*)malloc(g_ModelSize);
+    TIT_RET_CODE err = TIT_Feat_To_Model(mdlData, pData);
+    if(err != TIT_SPKID_SUCCESS){
+        SLOGE_FMT("in addSpeaker, failed to call TIT_Feat_To_Model, TitError: %d", err);
+    }
     const unsigned long &spkId = spk->spkId;
     int spkIdx = -1;
     if(g_mapAllSpks.find(spkId) != g_mapAllSpks.end()){
         SpkInfo *oldSpk = g_mapAllSpks[spkId].spk;
         if(oldSpk != NULL){
             spkIdx = g_mapAllSpks[spkId].idx;
-            TIT_SPKID_DEL_MDL(g_vecSpeakerModels[spkIdx]);
+            //TIT_SPKID_DEL_MDL(g_vecSpeakerModels[spkIdx]);
+            free(g_vecSpeakerModels[spkIdx]);
         }
         if(oldSpk != spk){
-            if(oldSpk->refcnt > 0){
+            if(oldSpk->cnter->get() > 0){
                 g_mapAllSpks[spkId].oldSpks.insert(oldSpk);   
             }
             else{
@@ -169,7 +218,7 @@ bool spkex_rmSpk(unsigned long spkId)
         SpkInfo *&delSpk = g_mapAllSpks[spkId].spk;
         int spkIdx = g_mapAllSpks[spkId].idx;
         set<SpkInfo*> oldSpks = g_mapAllSpks[spkId].oldSpks;
-        if(delSpk->refcnt == 0){
+        if(delSpk->cnter->get() == 0){
             delete delSpk;
         }
         else{
@@ -179,28 +228,49 @@ bool spkex_rmSpk(unsigned long spkId)
         if(oldSpks.size() == 0){
             g_mapAllSpks.erase(spkId);
         }
-        TIT_SPKID_DEL_MDL(g_vecSpeakerModels[spkIdx]);
+        //TIT_SPKID_DEL_MDL(g_vecSpeakerModels[spkIdx]);
+        free(g_vecSpeakerModels[spkIdx]);
         g_vecSpeakerModels.erase(g_vecSpeakerModels.begin() + spkIdx);
         g_vecSpeakerIDs.erase(g_vecSpeakerIDs.begin() + spkIdx);
+        for(unsigned idx=spkIdx; idx < g_vecSpeakerIDs.size(); idx++){
+            unsigned long curid = g_vecSpeakerIDs[idx];
+            assert(g_mapAllSpks.find(curid) != g_mapAllSpks.end());
+            g_mapAllSpks[curid].idx = idx;
+        }
     }
     else{
-        SLOGW_FMT("in removeSpeaker, no spk found in spk array. spk: %d.", spkId);
+        SLOGW_FMT("in removeSpeaker, no spk found in spk array. spk: %lu.", spkId);
     }
     return true;
 }
 
 unsigned spkex_getAllSpks(std::vector<unsigned long> &spkIds)
 {
+    SLockHelper mylock(&g_SpkInfoRwlock, false);
     spkIds.clear();
-
+    spkIds.insert(spkIds.begin(), g_vecSpeakerIDs.begin(), g_vecSpeakerIDs.end());
+    return g_vecSpeakerIDs.size();
 }
 
+#define MAX_PATH 512
+static char g_ModelPath[MAX_PATH];
+static char g_CfgFile[MAX_PATH];
 bool spkex_init(const char* cfgfile)
 {
     SLockHelper mylock(&g_SpkInfoRwlock);
+    /*
     TITStatus err = TIT_SPKID_INIT(cfgfile);
     if(err != StsNoError){
         SLOGE_FMT("in intSpkRec, fail to initialize spk engine. error: %d; file: %s.", err, cfgfile);
+        return false;
+    }
+    */
+    int indexSize;
+    snprintf(g_ModelPath, MAX_PATH, "ioacas");
+    snprintf(g_CfgFile, MAX_PATH, cfgfile);
+    TIT_RET_CODE err = TIT_SPKID_Init(g_CfgFile, g_ModelPath, g_FeatSize, g_ModelSize, indexSize);
+    if(err != TIT_SPKID_SUCCESS){
+        SLOGE_FMT("in spkex_init, faile to TIT_SPKID_Init, TitError: %d", err);
         return false;
     }
     return true;
@@ -208,18 +278,21 @@ bool spkex_init(const char* cfgfile)
 
 void spkex_rlse()
 {
-
-    SLockHelper mylock(&g_SpkInfoRwlock);
-    assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
-    for(size_t idx=0; idx < g_vecSpkInfoPtr.size(); idx++){
-        TIT_SPKID_DEL_MDL(g_vecSpeakerModel[idx]);
-        delete g_vecSpkInfoPtr[idx];
+    vector<unsigned long> allspks;
+    spkex_getAllSpks(allspks);
+    for(unsigned idx=0; idx < allspks.size(); idx++){
+        spkex_rmSpk(allspks[idx]);
     }
-    g_vecSpkInfoPtr.clear();
-    g_vecSpeakerModel.clear();
+
+    /*
     TITStatus err = TIT_SPKID_EXIT();
     if(err != StsNoError){
         SLOGE_FMT("in rlseSpkRec, failed to release spk engine. error: %d.\n", StsNoError);
+    }
+    */
+    TIT_RET_CODE err = TIT_SPKID_Exit();
+    if(err != TIT_SPKID_SUCCESS){
+        SLOGE_FMT("in spkex_rlse faied to TIT_SPKID_Exit, TitError: %d", err);
     }
 }
 
@@ -230,33 +303,73 @@ void spkex_rlse()
 int spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &score)
 {
     SLockHelper mylock(&g_SpkInfoRwlock, false);
-    assert(g_vecSpkInfoPtr.size() == g_vecSpeakerModel.size());
     spk = NULL;
     score = -1000.0;
-    if(g_vecSpeakerModel.size() == 0){
+    if(g_vecSpeakerModels.size() == 0){
         
         return 0;
     }
     vector<float> vecScores;
-    vecScores.resize(g_vecSpkInfoPtr.size());
+    size_t tIdx = 0;
+    vecScores.resize(g_vecSpeakerModels.size());
     for(size_t idx=0; idx < vecScores.size(); idx ++){
         vecScores[idx] = -1000.0;
     }
-    TITStatus err = TIT_SPKID_VERIFY_CLUSTER(pcmData, smpNum, const_cast<const void **>(&g_vecSpeakerModel[0]), g_vecSpeakerModel.size(), &vecScores[0]);
+    /*
+    TITStatus err = TIT_SPKID_VERIFY_CLUSTER(pcmData, smpNum, const_cast<const void **>(&g_vecSpeakerModels[0]), g_vecSpeakerModels.size(), &vecScores[0]);
     if(err != StsNoError){
         SLOGE_FMT("in processSpkRec, failed in spk engine. error: %d.", err);
         return -1;
     }
-    size_t tIdx = 0;
     for(size_t idx=0; idx < vecScores.size(); idx++){
         if(score < vecScores[idx]){
             tIdx = idx;
         }
     }
+    */
+    int target;
+    float* scores = &vecScores[0];
+    TIT_RET_CODE err = TIT_SCR_Buf_AddCfd_CutSil_Cluster(pcmData, smpNum, const_cast<void **>(&g_vecSpeakerModels[0]), scores, g_vecSpeakerModels.size(), target
+        );
+    if(err != TIT_SPKID_SUCCESS){
+        SLOGE_FMT("in spkex_score faied to TIT_SCR_Buf_AddCfd_CutSil_Cluster, TitError: %d", err);
+    }
+    if(target < 0){
+        return 1;
+    }
+    tIdx = target;
     score = vecScores[tIdx];
     if(score >= defaultSpkScoreThrd){
-        spk = g_vecSpkInfoPtr[tIdx];
+        unsigned long spkid = g_vecSpeakerIDs[tIdx];
+        spk = g_mapAllSpks[spkid].spk;
+        spk->cnter->incr();
     }
     return 1;
 }
 
+void returnSpkInfo(const SpkInfo *spk)
+{
+    bool bdel = false;
+    pthread_rwlock_rdlock(&g_SpkInfoRwlock);
+    SpkCheckBook & b = g_mapAllSpks[spk->spkId];
+    if(b.spk == spk){
+        assert(spk->cnter->decr() >= 0);
+    }
+    else{
+        assert(b.oldSpks.find(const_cast<SpkInfo*>(spk)) != b.oldSpks.end());
+        if(spk->cnter->get() == 1){
+            bdel = true;
+        }
+    }
+    pthread_rwlock_unlock(&g_SpkInfoRwlock);
+    if(bdel){
+        pthread_rwlock_wrlock(&g_SpkInfoRwlock);
+        assert(spk->cnter->decr() == 0);
+        SpkCheckBook &c = g_mapAllSpks[spk->spkId];
+        assert(c.oldSpks.erase(const_cast<SpkInfo*>(spk)) == 1);
+        if(c.oldSpks.size() == 0 && c.spk == NULL){
+            g_mapAllSpks.erase(spk->spkId);
+        }
+        pthread_rwlock_unlock(&g_SpkInfoRwlock);
+    }
+}

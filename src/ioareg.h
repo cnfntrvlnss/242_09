@@ -47,11 +47,6 @@ public:
     SpkInfoChd(unsigned long spkId =0, unsigned char type=0, int level=0):
         SpkInfo(spkId), servType(type), harmLevel(level)
     { }
-    SpkInfoChd(const char *spkname)
-        :SpkInfo((unsigned long)0), servType(0), harmLevel(0)
-    {
-        fromStr(spkname);
-    }
     string toStr()const{
         ostringstream oss;
         oss << std::dec<< spkId<<"_"<< static_cast<int>(servType)<< "_" << harmLevel<< ".param";
@@ -60,11 +55,8 @@ public:
     bool fromStr(const char* strSpk);
 };
 
-void delayrm_spkObj(const SpkInfoChd *spk);
 bool addSpkPerFile(const char* szDir, const char* filename);
-//bool checkSpkName(const char *name);
-//bool addSpkSample(const char* name, char* data, unsigned len);
-//void rmSpkSample(unsigned spkId);
+
 //////////////////////////////////
 typedef struct ProjectRecord{
 	ProjectRecord(const char *filepath="", time_t timemark = 0){
