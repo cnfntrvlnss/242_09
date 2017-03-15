@@ -29,7 +29,6 @@ const unsigned int g_uLangTurkType = 0x9a;
 const unsigned int g_uLangTurkID = 0x30;
 const unsigned int g_uLangAlabType = 0x9b;
 const unsigned int g_uLangAlabID = 0x40;
-const unsigned short g_uSpkServType = 0x92;
 unsigned dft_getTypeFromId(unsigned int id)
 {
     if(id == g_uLangWeirID) return g_uLangWeirType;
@@ -40,9 +39,15 @@ unsigned dft_getTypeFromId(unsigned int id)
     else return g_uLangWeirType;
 }
 
-//下面的两个变量是针对于语种的；第一个变量控制着写文件；第二个变量控制着上报。
+//control storing result.
 std::vector<std::pair<unsigned int, std::pair<unsigned int, unsigned int> > > g_mLangReports;
+//control reporting result.
 static std::map<std::pair<unsigned int, unsigned int>, int> g_mLangReportFilter;
+
+//------------------------spk part--------------
+const unsigned short g_uSpkServType = 0x92;
+static float g_fSpkReportThreshold = 0.0;
+
 /*****************
  * param str eg: 11->1;10->2;
  * return list eg:[(11,1), (10,2)]
@@ -166,6 +171,8 @@ static void initGlobal(BufferConfig &myBufCfg)
     Config_getValue(&g_AutoCfg, "", "savePCMTopDir", m_TSI_SaveTopDir);
     Config_getValue(&g_AutoCfg, "lid", "languageReports", langReports);
     Config_getValue(&g_AutoCfg, "lid", "langReportFilter", langReportFilter);
+    Config_getValue(&g_AutoCfg, "spk", "reportThreshold", g_fSpkReportThreshold);
+
     Config_getValue(&g_AutoCfg, "projectBuffer", "ifDiscardable", g_bDiscardable);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSecondsStep", myBufCfg.waitSecondsStep);
     Config_getValue(&g_AutoCfg, "projectBuffer", "waitSeconds", myBufCfg.waitSeconds);
@@ -198,6 +205,7 @@ static void initGlobal(BufferConfig &myBufCfg)
             LOG4Z_VAR(m_TSI_SaveTopDir)
             LOG4Z_VAR(g_bDiscardable)
             LOG4Z_VAR(g_bSaveAfterRec)
+            LOG4Z_VAR(g_fSpkReportThreshold)
             LOG4Z_VAR(formLangReportsStr(g_mLangReports).c_str()) LOG4Z_VAR(formReportFilterStr(g_mLangReportFilter).c_str())
             LOG4Z_VAR(g_AutoCfg.configFile)
             LOG4Z_VAR(myBufCfg.waitSecondsStep)
@@ -326,13 +334,12 @@ int AddCfgByBuf(const char *pData,
         int iHarmLevel)
 {
     if(iType == g_uSpkServType && g_bUseSpk){
-        SpkInfoChd* tmpSpk = new SpkInfoChd(id, iType, iHarmLevel);
-        const SpkInfo* oldSpk;
-        bool bret = spkex_addSpk(tmpSpk, const_cast<char*>(pData), static_cast<int>(iDataBytes), oldSpk);
-        if(oldSpk){
-            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(oldSpk));
-        } 
-        return bret;
+        SpkInfoChd *curspk = new SpkInfoChd(id, iType, iHarmLevel);
+        if(!spkex_addSpk(curspk, const_cast<char*>(pData), iDataBytes)){
+            delete curspk;
+            return 0;
+        }
+        return 1;
     }
     return 0;
 }
@@ -349,11 +356,10 @@ int AddCfgByDir(int iType, const char *strDir)
 int RemoveAllCfg(int iType)
 {
     if(iType == g_uSpkServType && g_bUseSpk){
-        vector<const SpkInfo*> allSpks;
-        spkex_getAllSpks(allSpks);
-        for(size_t idx=0; idx < allSpks.size(); idx++){
-            spkex_rmSpk(allSpks[idx]);
-            delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(allSpks[idx]));
+        vector<unsigned long> allids;
+        spkex_getAllSpks(allids);
+        for(unsigned idx=0; idx < allids.size(); idx++){
+            spkex_rmSpk(allids[idx]);
         }
         return 1;
     }
@@ -362,14 +368,7 @@ int RemoveAllCfg(int iType)
 int RemoveCfgByID(unsigned int id, int iType, int iHarmLevel)
 {
     if(iType == g_uSpkServType && g_bUseSpk){
-        vector<const SpkInfo*> allSpks;
-        spkex_getAllSpks(allSpks);
-        for(size_t idx=0; idx < allSpks.size(); idx++){
-            if(allSpks[idx]->spkId == id){
-                spkex_rmSpk(allSpks[idx]);
-                delayrm_spkObj(dynamic_cast<const SpkInfoChd*>(allSpks[idx]));
-            }
-        }
+        spkex_rmSpk(id);
         return 1;
     }
     return 0;
@@ -407,14 +406,15 @@ bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
     
     bool brep = false;
     if(g_mLangReportFilter.find(make_pair(result.m_iAlarmType, result.m_iTargetID)) != g_mLangReportFilter.end() && g_mLangReportFilter[make_pair(result.m_iAlarmType, result.m_iTargetID)] <= result.m_fLikely){
+        result.m_iTargetID |= 0x200;
         brep = true;
     }
+    else if(result.m_iAlarmType == g_uSpkServType){
+        if(result.m_fLikely >= g_fSpkReportThreshold) brep = true;
+    }
+    
     if(brep){
-        // only support lang report.
-        // TODO add spkreg.
-        result.m_iTargetID |= 0x200;
         g_ReportResultAddr(g_iModuleID, &result);
-        result.m_iTargetID &= ~0x200;
         const char* debugDir = "ioacas/debug/";
         if(if_directory_exists(debugDir)){
             char wholePath[MAX_PATH];

@@ -87,7 +87,7 @@ static char szSpkCfgFile[MAX_PATH] = "./ioacas/SpkSRE.cfg";
 bool g_bUseSpk = true;
 static bool g_bSpkUseVad = false;
 static bool g_bSpkUseMCut = false;
-extern float defaultSpkScoreThrd;
+static float defaultSpkScoreThrd;
 //static queue<pair<const SpkInfoChd*, map<pthread_t, unsigned long> > > g_PendingDeleteSpks;
 
 bool SpkInfoChd::fromStr(const char* strSpk){
@@ -221,6 +221,7 @@ static void operate_spklib_offline()
 	if(taskfd == NULL){
 		return ;
 	}
+    LOGFMT_INFO(g_logger, "operate_spklib_offline begin process new task.");
 	char tmpline[512];
 	char *taskstr, *modelname;
 	while(fgets(tmpline, 512, taskfd) != NULL){
@@ -306,7 +307,11 @@ void ioareg_maintain_procedure(time_t curTime)
         string statStr;
         getBufferStatus(statStr);
         LOGFMT_INFO(g_StatusLogger, "*************projectbuffer status*************\n%s", statStr.c_str());
-
+    }
+    static time_t offlinelasttime;
+    if(curTime > 3 + offlinelasttime){
+        offlinelasttime = curTime;
+        operate_spklib_offline();
     }
 }
 bool ioareg_init()
@@ -716,8 +721,9 @@ timespk = clockoutput_end();
         res.m_fLikely = getScoreFunc(NULL)(score);
         res.m_fSegLikely[0] = res.m_fLikely;
         returnSpkInfo(spk);
-        reportIoacasResult(rec.result, WriteLog, logLen);
-
+        if(res.m_fLikely >=defaultSpkScoreThrd){
+            reportIoacasResult(rec.result, WriteLog, logLen);
+        }
         break;
     }
     LOGFMTT("%s %s %s %s", clockoutput_end().c_str(), timemusic.c_str(),timevad.c_str(), timespk.c_str());

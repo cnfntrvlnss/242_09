@@ -126,7 +126,7 @@ static int g_ModelSize;
 vector<void*> g_vecSpeakerModels;
 vector<unsigned long> g_vecSpeakerIDs;
 map<unsigned long, SpkCheckBook > g_mapAllSpks;
-static float defaultSpkScoreThrd = 0.0;
+static float spkex_ScoreThreshold = 0.0001;
 pthread_rwlock_t g_SpkInfoRwlock = PTHREAD_RWLOCK_INITIALIZER;
 
 static string g_strSpkMdlDir = "ioacas/SpkModel/";
@@ -266,7 +266,7 @@ bool spkex_init(const char* cfgfile)
     }
     */
     int indexSize;
-    snprintf(g_ModelPath, MAX_PATH, "ioacas");
+    snprintf(g_ModelPath, MAX_PATH, ".");
     snprintf(g_CfgFile, MAX_PATH, cfgfile);
     TIT_RET_CODE err = TIT_SPKID_Init(g_CfgFile, g_ModelPath, g_FeatSize, g_ModelSize, indexSize);
     if(err != TIT_SPKID_SUCCESS){
@@ -339,7 +339,7 @@ int spkex_score(short* pcmData, unsigned smpNum, const SpkInfo* &spk, float &sco
     }
     tIdx = target;
     score = vecScores[tIdx];
-    if(score >= defaultSpkScoreThrd){
+    if(score >= spkex_ScoreThreshold){
         unsigned long spkid = g_vecSpeakerIDs[tIdx];
         spk = g_mapAllSpks[spkid].spk;
         spk->cnter->incr();

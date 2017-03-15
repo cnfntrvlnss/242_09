@@ -44,7 +44,7 @@ class SpkInfoChd: public SpkInfo
 public:
     unsigned char servType;
     int harmLevel;
-    SpkInfoChd(unsigned long spkId =0, unsigned char type=0, int level=0):
+    explicit SpkInfoChd(unsigned long spkId =0, unsigned char type=0, int level=0):
         SpkInfo(spkId), servType(type), harmLevel(level)
     { }
     string toStr()const{
