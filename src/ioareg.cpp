@@ -64,6 +64,7 @@ static pthread_key_t g_RecWavBufsKey;
 //static pthread_t *g_pthread_id = NULL;
 static short g_ThreadNum = 1;
 static RecogThreadSpace *g_RecSpaceArr = NULL;
+LoggerId g_StatusLogger;
 
 //////////////////-----vad-----
 static bool g_bUseVAD=false;
@@ -314,6 +315,7 @@ void ioareg_maintain_procedure(time_t curTime)
         operate_spklib_offline();
     }
 }
+
 bool ioareg_init()
 {
 	ScoreConfig ssCfg;
@@ -339,6 +341,7 @@ bool ioareg_init()
 		g_szAllPrjsDir[tmpLen + 1] = '\0';
 	}
 
+	g_StatusLogger = g_Log4zManager->createLogger("status");
 #define LOG4Z_VAR(x) << #x "=" << x << "\n"
     LOG_INFO(g_logger, "====================config====================\n" 
             LOG4Z_VAR(g_szAllPrjsDir)

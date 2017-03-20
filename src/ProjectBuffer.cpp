@@ -101,17 +101,16 @@ bool ProjectBuffer::initGlobal(ProjectBuffer::BufferConfig param)
     return true;
 }
 
-void ProjectBuffer::setPid(unsigned long pid, time_t curTime)
+void ProjectBuffer::setPid(unsigned long pid, time_t curTime, bool bbamp)
 {
     AutoLock myLock(m_BufferLock);
     if(curTime == 0) curTime = time(NULL);
     this->ID = pid;
     this->bFull = false;
     this->bAlloc = true;
-    this->bHasBamp = false;
+    this->bHasBamp = bbamp;
     this->bBampHit = false;
     this->bRelsed = false;
-    //this->uBampEnd = 0;
     this->bampEndIdx = 0;
     this->bampEndOffset = BLOCKSIZE;
     this->mainRegStTime.tv_sec = 0;
@@ -182,7 +181,7 @@ void ProjectBuffer::getUnBampData(unsigned &preidx, unsigned &prest, unsigned &e
     getDataSegmentIn(idx, st, endidx, endst, data);
     bPreHit = this->bBampHit;
     bfull = this->bFull;
-    prjtime.tv_sec = this->fullRecord.seconds;
+    prjtime.tv_sec = this->prjTime;
     prjtime.tv_usec = 0;
 }
 
@@ -192,28 +191,30 @@ ostream& operator<<(ostream& str, ProjectBuffer::ArrivalRecord rec)
     return str;
 }
 
-//TODO no one care it returning false!!!
-bool ProjectBuffer::relse(vector<DataBlock>& retArr){
+void ProjectBuffer::relse(vector<DataBlock>& retArr){
+    retArr.clear();
     AutoLock lock(m_BufferLock);
-    if(this->bHasBamp){
-        if(this->bampEndIdx == arrUnits.size() - 1 && this->bampEndOffset == arrUnits.back().len + arrUnits.back().offset){
-        }
-        else{
-            return false;
+    if(bRelsed) return;
+    bRelsed = true;
+
+    const unsigned addInfoLen = 50;
+    char szAddInfo[addInfoLen];
+    szAddInfo[0] = '\0';
+    if(bHasBamp){
+        unsigned unbampBytes = (arrUnits.size() - 1 - this->bampEndIdx) * BLOCKSIZE + arrUnits.back().len + arrUnits.back().offset - this->bampEndOffset;
+        if(unbampBytes > 0){
+            snprintf(szAddInfo, addInfoLen, "unbampBytes: %u", unbampBytes);
         }
     }
-    if(bRelsed) return true;
-    bRelsed = true;
 
     unsigned tolLen = 0;
     for(size_t idx=1; idx < arrUnits.size(); idx++){
         tolLen += arrUnits[idx].len;
     }
     retArr.insert(retArr.end(), arrUnits.begin() + 1, arrUnits.end());
-    LOGFMT_INFO(g_BufferLogger, "PID=%lu SIZE=%lu release ProjectBuffer.", this->ID, tolLen);
+    arrUnits.resize(1);
+    LOGFMT_INFO(g_BufferLogger, "PID=%lu SIZE=%lu release ProjectBuffer. %s", this->ID, tolLen, szAddInfo);
     LOGFMT_DEBUG(g_BufferLogger, "PID=%lu MainReg start %ld %ld; end: %ld %ld.", this->ID, mainRegStTime.tv_sec, mainRegStTime.tv_usec, mainRegEdTime.tv_sec, mainRegEdTime.tv_usec);
-
-    return true;
 }
 
 /**
@@ -316,6 +317,7 @@ static LockHelper g_ProjsIDsLocker;
 //static LockHelper g_PostFullIDsLocker;
 static pthread_cond_t g_ProjsFullCond;
 //static pthread_cond_t g_ProjsEmptyCond;
+static FuncPushProj g_PushProjAddr;
 
 void getBufferStatus(string &outstr)
 {
@@ -344,7 +346,7 @@ static void makeTimespec(struct timespec *tsp)
     tsp->tv_nsec = now.tv_usec * 1000;
 }
 
-bool init_bufferglobal(BufferConfig buffConfig)
+bool init_bufferglobal(BufferConfig buffConfig, FuncPushProj pushProjAddr)
 {
     AutoLock myLock(g_ProjsLocker);
     ProjectBuffer::initGlobal(static_cast<ProjectBuffer::BufferConfig>(buffConfig));
@@ -359,7 +361,7 @@ bool init_bufferglobal(BufferConfig buffConfig)
     LOGFMT_INFO(g_BufferLogger, "waitSecondsStep=%u.", ProjectBuffer::bufferConfig.waitSecondsStep);
     LOGFMT_INFO(g_BufferLogger, "waitSeconds=%u.", ProjectBuffer::bufferConfig.waitSeconds);
     LOGFMT_INFO(g_BufferLogger, "waitLength=%u.", ProjectBuffer::bufferConfig.waitLength);
-
+    g_PushProjAddr = pushProjAddr;
     return true;
 }
 
@@ -398,7 +400,7 @@ void notifyProjFinish(unsigned long pid)
 /**
  *
  */
-void recvProjSegment(ProjectSegment param, bool iswait, bool bBamp)
+void recvProjSegment(ProjectSegment param, bool iswait)
 {
     //LOGFMT_TRACE(g_BufferLogger, "PID=%llu receive new data, size=%u.", pid, len);
     unsigned long &pid = param.pid;
@@ -410,9 +412,12 @@ void recvProjSegment(ProjectSegment param, bool iswait, bool bBamp)
     if(g_mapProjs.find(pid) == g_mapProjs.end()){
         time_t curTime;
         time(&curTime);
-        ProjectBuffer * tmpPrj = new ProjectBuffer(pid, curTime);
+        ProjectBuffer * tmpPrj = new ProjectBuffer(pid, curTime, g_PushProjAddr != NULL);
         g_mapProjs[pid].prj = tmpPrj;
-        if(bBamp) g_mapProjs[pid].prj->setBamp();
+        //if(bBamp) g_mapProjs[pid].prj->setBamp();
+        if(g_PushProjAddr != NULL){
+            if(g_PushProjAddr(tmpPrj)) g_mapProjs[pid].cnt ++;
+        }
         //add to setPrevFullIDs.
         g_PrevFullIDsLocker.lock();
         g_mapPrevFullIDs.insert(std::make_pair(pid, ProjectFullInfo(tmpPrj, curTime)));

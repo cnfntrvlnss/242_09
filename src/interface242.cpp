@@ -143,7 +143,6 @@ bool g_bSaveAfterRec=false; // when after processing, for project ID.
 char g_szEth4ReportIP[50];
 static string g_strIp;
 LoggerId g_logger;
-LoggerId g_StatusLogger;
 
 std::map<unsigned long,ProjRecord_t> NewReportedID;
 pthread_mutex_t g_lockNewReported = PTHREAD_MUTEX_INITIALIZER;
@@ -192,7 +191,6 @@ static void initGlobal(BufferConfig &myBufCfg)
 		m_TSI_SaveTopDir[tmpLen + 1] = '\0';
 	}
 	g_logger = g_Log4zManager->createLogger("ioacas");
-	g_StatusLogger = g_Log4zManager->createLogger("status");
     char strVer[50];
     int verLen = 50;
     GetDLLVersion(strVer, verLen);

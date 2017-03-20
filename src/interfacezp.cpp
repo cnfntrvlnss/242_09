@@ -216,6 +216,7 @@ static void initGlobal(BufferConfig &myBufCfg)
 static void * bampMatchThread(void *);
 static void *ioacas_maintain_procedure(void *);
 static void reportBampResultSeg(BampResultParam param, ostream& oss);
+static bool addBampProj(ProjectBuffer *proj);
 
 int InitDLL(int iPriority,
         int iThreadNum,
@@ -238,7 +239,7 @@ int InitDLL(int iPriority,
     buffconfig.m_uBlocksMax = 20 * 600;
     initGlobal(buffconfig);
 
-    init_bufferglobal(buffconfig);
+    init_bufferglobal(buffconfig, addBampProj);
     if(!ioareg_init()){
         return 1;
     }
@@ -299,7 +300,7 @@ int SendData2DLL(WavDataUnit *p)
     prj.pid = p->m_iPCBID;
     prj.data = p->m_pData;
     prj.len = p->m_iDataLen;
-    recvProjSegment(prj, !g_bDiscardable, true);
+    recvProjSegment(prj, !g_bDiscardable);
     if(g_bUseRecSess != NULL){
         Audiz_WaveUnit unit;
         unit.m_iPCBID = prj.pid;
@@ -348,13 +349,43 @@ static void appendDataToReportFile(BampMatchParam &par)
         }
     }
 }
+
+static map<unsigned long, ProjectBuffer*> g_AllProjs4Bamp;
+static pthread_mutex_t g_AllProjs4BampLocker = PTHREAD_MUTEX_INITIALIZER;
+static bool addBampProj(ProjectBuffer *proj)
+{
+    pthread_mutex_lock(&g_AllProjs4BampLocker);
+    assert(g_AllProjs4Bamp.find(proj->ID) == g_AllProjs4Bamp.end());
+    g_AllProjs4Bamp[proj->ID] = proj;
+    pthread_mutex_unlock(&g_AllProjs4BampLocker);
+    return true;
+}
+
+static ProjectBuffer *getNextBampProj(unsigned long pid)
+{
+    ProjectBuffer *ret = NULL;
+    pthread_mutex_lock(&g_AllProjs4BampLocker);
+    map<unsigned long, ProjectBuffer*>::iterator it = g_AllProjs4Bamp.lower_bound(pid);
+    if(it != g_AllProjs4Bamp.end()){
+        ret = it->second;
+    }
+    pthread_mutex_unlock(&g_AllProjs4BampLocker);
+    return ret;
+}
+static void delBampProj(ProjectBuffer *prj)
+{
+    pthread_mutex_lock(&g_AllProjs4BampLocker);
+    assert(g_AllProjs4Bamp.erase(prj->ID) == 1);
+    pthread_mutex_unlock(&g_AllProjs4BampLocker);
+    returnBuffer(prj);
+}
+
 /***
  * keep doing bampMatch until projectBuffer is full.
  *
  */
 void * bampMatchThread(void *)
 {
-    map<unsigned long, ProjectBuffer*> allProjs;   
     BampMatchObject *obj = openBampHandle();
     if(obj == NULL){
         LOGFMT_ERROR(g_logger, "Error opening one session, exit!!!");
@@ -365,41 +396,36 @@ void * bampMatchThread(void *)
     while(true){
         clockoutput_start("one circle of bampMatch");
         sleep(1);
-        obtainAllBuffers(allProjs);
-        LOGFMT_TRACE(g_logger, "in BampMatchThread, project num: %u", allProjs.size());
         vector<BampMatchParam> allBufs;
         allBufs.clear();
+        unsigned long curpid = 0;
+        unsigned allcnt = 0;
+        unsigned retcnt = 0;
         while(true){
-            if(allProjs.size() == 0) break;
-            vector<unsigned long> unPrjs;
-            for(map<unsigned long, ProjectBuffer*>::iterator it=allProjs.begin(); it != allProjs.end(); it++){
-                BampMatchParam tmpPar(it->second->ID, it->second);
-                bool bPrjFull = false;
-                it->second->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data, tmpPar.bPreHit,  bPrjFull, tmpPar.curtime);
-                if(tmpPar.data.size() == 0){
-                    if(bPrjFull) unPrjs.push_back(it->first);
-                    continue;
+            ProjectBuffer* tmpPrj = getNextBampProj(curpid);
+            if(tmpPrj == NULL) break;
+            curpid = tmpPrj->ID + 1;
+            allcnt ++;
+            BampMatchParam tmpPar(tmpPrj->ID, tmpPrj);
+            bool bPrjFull = false;
+            tmpPrj->getUnBampData(tmpPar.preIdx, tmpPar.preOffset, tmpPar.endIdx, tmpPar.endOffset, tmpPar.data, tmpPar.bPreHit,  bPrjFull, tmpPar.curtime);
+            if(tmpPar.data.size() == 0){
+                if(bPrjFull){
+                    delBampProj(tmpPrj);
+                    retcnt ++;
                 }
-                unsigned tolLen = 0;
-                for(unsigned idx=0; idx < tmpPar.data.size(); idx++){
-                    tolLen += tmpPar.data[idx].len;
-                }
-                assert(tolLen % g_uBampFixedLen == 0);
-                tmpPar.preLen = tmpPar.data[0].getCap() * (tmpPar.preIdx - 1) + tmpPar.preOffset;
-                tmpPar.tolLen = 0;
-                for(size_t jdx=0; jdx < tmpPar.data.size(); jdx++){
-                    tmpPar.tolLen += tmpPar.data[jdx].len;
-                }
-                
-                allBufs.push_back(tmpPar);
+                continue;
             }
-            for(size_t idx=0; idx < unPrjs.size(); idx++){
-                returnBuffer(allProjs[unPrjs[idx]]);
-                allProjs.erase(unPrjs[idx]);
+            tmpPar.preLen = tmpPar.data[0].getCap() * (tmpPar.preIdx - 1) + tmpPar.preOffset;
+            tmpPar.tolLen = 0;
+            for(size_t jdx=0; jdx < tmpPar.data.size(); jdx++){
+                tmpPar.tolLen += tmpPar.data[jdx].len;
             }
-
-            if(allBufs.size() == 0) break;
-            LOGFMT_DEBUG(g_logger, "in BampMatchThread, project having new data num: %u", allBufs.size());
+            assert(tmpPar.tolLen % g_uBampFixedLen == 0);
+            allBufs.push_back(tmpPar);
+        }
+        LOGFMT_DEBUG(g_logger, "one loop of bamp match, BampProjectNum: %u; ReturnBampProjectNum: %u; BampTaskNum: %lu.", allcnt, retcnt, allBufs.size());
+        if(allBufs.size() > 0){
             obj->bamp_match_vad(allBufs);
             for(size_t idx=0; idx < allBufs.size(); idx++){
                 BampMatchParam &par = allBufs[idx];
@@ -407,9 +433,7 @@ void * bampMatchThread(void *)
                 //append reported file here.
                 appendDataToReportFile(par);
             }
-            break;
         }
-
         string output = clockoutput_end();
         LOGFMTT(output.c_str());
     }

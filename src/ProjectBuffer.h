@@ -32,16 +32,16 @@ public:
     ProjectBuffer(){
         init();
     }
-    ProjectBuffer(unsigned long pid, time_t curTime = 0){
+    explicit ProjectBuffer(unsigned long pid, time_t curTime = 0, bool bbamp = false){
         init();
-        setPid(pid, curTime);
+        setPid(pid, curTime, bbamp);
     }
     ~ProjectBuffer(){
         std::vector<DataBlock> retArr;
-        assert(relse(retArr));
+        relse(retArr);
         assert(retArr.size() == 0);
     }
-    void setPid(unsigned long, time_t curTime =0);
+    void setPid(unsigned long, time_t curTime =0, bool bBamp = false);
     struct timeval getPrjTime(){
         AutoLock lock(m_BufferLock);
         struct timeval ret;
@@ -50,10 +50,6 @@ public:
         return ret;
     }
 
-    void setBamp(){
-        AutoLock lock(m_BufferLock);
-        this->bHasBamp = true;
-    }
     void setBampEndPos(unsigned preIdx, unsigned preSt, unsigned idx, unsigned st, bool bhit){
         AutoLock lock(m_BufferLock);
         assert(this->bampEndIdx == preIdx);
@@ -61,33 +57,10 @@ public:
         this->bampEndIdx = idx;
         this->bampEndOffset = st;
         if(bhit) this->bBampHit = true;
-        /*
-        if(this->bBampHit){
-            if(this->bampFp) this->funcSaveData(bampFp, data);
-        }
-        else if(bHit){
-            if(this->bampFp){
-                std::vector<DataBlock> allData;
-                getDataSegment(1, 0, idx, st, allData);
-                funcSaveData(bampFp, allData);
-            }
-            this->bBampHit = true;
-        }
-        */
     }
     
     void getUnBampData(unsigned &idx, unsigned &st, unsigned &endidx, unsigned &endst, std::vector<DataBlock>& data, bool& bPreHit, bool& bfull, struct timeval & prjtime);
-    bool getBampHit(){
-        AutoLock lock(m_BufferLock);
-        return this->bBampHit;
-    }
-    /*
-    void setBampFile(FILE *fp, FuncSaveData addr){
-        AutoLock lock(m_BufferLock);
-        bampFp = fp;
-        funcSaveData = addr;
-    }
-    */
+
     void startMainReg(struct timeval curtime = ZERO_TIMEVAL){
         //if(memcmp(&curtime, &ZERO_TIMEVAL, sizeof(struct timeval) == 0)){
         if(curtime.tv_sec == ZERO_TIMEVAL.tv_sec && curtime.tv_usec == ZERO_TIMEVAL.tv_usec){
@@ -105,7 +78,7 @@ public:
         mainRegEdTime = curtime;
     }
     
-    bool relse(std::vector<DataBlock>& retArr);
+    void relse(std::vector<DataBlock>& retArr);
     void getData(std::vector<DataBlock>& vec);
     unsigned getDataLength();
     bool isFull(time_t curTime, time_t& nextTime);
@@ -135,7 +108,6 @@ private:
         fullRecord = lastRecord;
     }
 
-    //bool saveBampProject(unsigned idx, unsigned offset);
     void getDataSegmentIn(unsigned idx0, unsigned offset0, unsigned idx1, unsigned offset1, std::vector<DataBlock>& data);
 public:
     struct BufferConfig{
@@ -174,10 +146,6 @@ private:
     bool bBampHit;
     bool bHasBamp;
     bool bRelsed;
-    //unsigned uBampEnd;
-    //FILE *bampFp;// should be closed in relse.
-    //FuncSaveData funcSaveData;
-    //std::string bampProjectPath;
     unsigned bampEndIdx;
     unsigned bampEndOffset;
     unsigned fullUnitIdx;
@@ -205,11 +173,14 @@ struct ProjectSegment{
     char *data;
     unsigned len;
 };
+
+bool dispatchOneProj(ProjectBuffer* proj);
+typedef bool (*FuncPushProj)(ProjectBuffer* prj);
 void getBufferStatus(std::string &outstr);
-bool init_bufferglobal(BufferConfig buffConfig);
+bool init_bufferglobal(BufferConfig buffConfig, FuncPushProj pushProjAddr = NULL);
 void rlse_bufferglobal();
 extern "C" void notifyProjFinish(unsigned long pid);
-void recvProjSegment(ProjectSegment param, bool iswait = false, bool bBamp = true);
+void recvProjSegment(ProjectSegment param, bool iswait = false);
 ProjectBuffer* obtainBuffer(unsigned long pid);
 void obtainAllBuffers(std::map<unsigned long, ProjectBuffer*>& allBufs);
 ProjectBuffer* obtainFullBufferTimeout(unsigned secs = -1);

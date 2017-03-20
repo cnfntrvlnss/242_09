@@ -5,7 +5,8 @@
 	> Created Time: Sun 27 Nov 2016 03:57:50 AM EST
  ************************************************************************/
 
-#include "spkEngine.h"
+//#include "spkEngine.h"
+#include "TIT_SPKID_OFFL_API.h"
 #include "dllSRVADCluster.h"
 #include "MusicDetect.h"
 #include <cstdlib>
@@ -61,6 +62,56 @@ bool MusicCut_Free()
 }
 #endif
 
+#ifdef SPEAKID_2010_4_17
+
+// 初始化
+TIT_DECLDIR TIT_RET_CODE TIT_SPKID_Init(
+    char    *p_cConfigFile,                // 配置文件
+    char    *p_cCurModelPath,              // 模型路径
+    int     &p_nFeatLen,                   //特征大小
+    int     &p_nModelLen,                  // 模型大小
+    int		&p_nIndexlen)                  // 索引大小
+{
+    OUTPUT_FORK(TIT_SPKID_Init);
+    p_nFeatLen = p_nModelLen = p_nIndexlen = 1;
+    return TIT_SPKID_SUCCESS;
+}
+
+TIT_DECLDIR TIT_RET_CODE TIT_Feat_To_Model(
+    void    *p_pFeatModel,		        //语音特征
+    void	*p_pSpeakerModel)			//语音模型
+{
+    OUTPUT_FORK(TIT_Feat_To_Model);
+    //p_pSpeakerModel[0] = '\0';
+    return TIT_SPKID_SUCCESS;
+}
+
+// 结束
+TIT_DECLDIR TIT_RET_CODE TIT_SPKID_Exit()
+{
+    OUTPUT_FORK(TIT_SPKID_Exit);
+    return TIT_SPKID_SUCCESS;
+}
+
+// Buf接口的多个说话人识别接口, 切静音+说话人聚类
+TIT_DECLDIR TIT_RET_CODE TIT_SCR_Buf_AddCfd_CutSil_Cluster(
+    short   *p_sDat,                      // 音频数据8K-16Bit
+    int     p_nDatLen,				      // 音频数据长度（采样点数目）
+    void    **p_pSpeakerModel,		      // 待识别的模型数组
+    float   *&p_pfSpkScore,			      // 模型得分
+    int     p_nModelNum,			      // 当前加载的模型数目
+    int     &p_nMatchModelIndex,          // 返回识别出的模型index，若小于零，则表示拒识
+    char    *wavfile)             // 调试用, 置为 NULL
+{
+    OUTPUT_FORK(TIT_SCR_Buf_AddCfg_CutSil_Cluster);
+    if(p_nModelNum > 0){
+        p_pfSpkScore[0] = 0.0;
+        p_nMatchModelIndex = 0;
+    }
+    return TIT_SPKID_SUCCESS;
+}
+
+#else
 TITStatus TIT_SPKID_INIT(const char * cfgfile)
 {
     OUTPUT_FORK(tit_spkid_init);
@@ -98,3 +149,4 @@ TITStatus TIT_SPKID_SAVE_MDL_IVEC(const void *const Ivec,const char *const model
     OUTPUT_FORK(tit_spkid_saved_mdl_ivec);
     return StsNoError;
 }
+#endif
