@@ -647,29 +647,32 @@ bool reportIoacasResult(CDLLResult &result, char *writeLog, unsigned &len)
 
 void *ioacas_maintain_procedure(void *)
 {
-    time_t cur_time;
-    time(&cur_time);
+    while(true){
 
-    if(true){
-        //maitain project filter.
-        pthread_mutex_lock(&g_lockNewReported);
-        static time_t projectfilterlasttime = 0;
-        if(cur_time   > 3600 + projectfilterlasttime){
-            projectfilterlasttime = cur_time;
+        time_t cur_time;
+        time(&cur_time);
+
+        if(true){
+            //maitain project filter.
+            pthread_mutex_lock(&g_lockNewReported);
+            static time_t projectfilterlasttime = 0;
+            if(cur_time   > 3600 + projectfilterlasttime){
+                projectfilterlasttime = cur_time;
+            }
+            pthread_mutex_unlock(&g_lockNewReported);
         }
-        pthread_mutex_unlock(&g_lockNewReported);
-    }
-    if(true){
-        //update some configurations.
-        static time_t lasttime;
-        if(cur_time > 3 + lasttime){
-            lasttime = cur_time;
-            if(g_AutoCfg.checkAndLoad()){
+        if(true){
+            //update some configurations.
+            static time_t lasttime;
+            if(cur_time > 3 + lasttime){
+                lasttime = cur_time;
+                if(g_AutoCfg.checkAndLoad()){
+                }
             }
         }
+        ioareg_maintain_procedure(cur_time);
+        sleep(3);
     }
-    ioareg_maintain_procedure(cur_time);
-    
     return NULL;
 }
 #if 0

@@ -294,7 +294,7 @@ void ioareg_maintain_procedure(time_t curTime)
         }
     }
     static time_t statuslasttime;
-    if(curTime > 60 + statuslasttime){
+    if(curTime > 30 + statuslasttime){
         statuslasttime = curTime;
         char sztable[1024];
         unsigned curlen = 0;
