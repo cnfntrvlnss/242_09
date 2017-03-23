@@ -64,7 +64,7 @@ FuncIsAllFinished funcIsAllFinished;
 #define QUATEMACRO(x) #x
 #define QUATEMACROS(x) QUATEMACRO(x)
 unsigned getPackBytesByCompl(){
-    unsigned ret = 320000;
+    unsigned ret = 720000;
 #ifdef TESTDIR
     if(strncmp(QUATEMACROS(TESTDIR), "testZP", 9) == 0){
         ret = 48000;
@@ -134,7 +134,7 @@ public:
 map<unsigned long long, ProjInfo> g_mId2Infos;
 pthread_mutex_t g_ProjIdsLock = PTHREAD_MUTEX_INITIALIZER;
 FILE *g_fpRes = NULL;
-float g_fWaitSecs = 0.1;
+float g_fWaitSecs = 0.01;
 
 int receive_result(unsigned int iModuleID, CDLLResult *res)
 {
@@ -293,9 +293,11 @@ void *sendProjectProcess(void *param)
 		ptask->dataLen = ifs.tellg() - headlen;
         ifs.seekg(headlen);
         ptask->sendLen = 0;
+        /*
         pthread_mutex_lock(&g_ProjIdsLock);
         g_mId2Infos[ptask->id] = *ptask;
         pthread_mutex_unlock(&g_ProjIdsLock);
+        */
 
 		while(true)
 		{
@@ -336,7 +338,7 @@ void *sendProjectProcess(void *param)
 		}
         ifs.close();
         
-        bool bSendData = false;
+        bool bSendData = true;
         pthread_mutex_lock(&g_ProjIdsLock);
         if(g_mId2Infos.find(ptask->id) != g_mId2Infos.end()){
             ProjInfo& curobj = g_mId2Infos[ptask->id];

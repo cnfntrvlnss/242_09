@@ -428,15 +428,24 @@ void recvProjSegment(ProjectSegment param, bool iswait)
     tmpPrj = g_mapProjs[pid].prj;
     g_mapProjs[pid].cnt ++;
     DataBlock blk;
+bool bvalidblk = false;
     if(g_mapProjs[pid].leftSize < dataLen){
+        while(true){
         blk = BlockMana_alloc();
         if(blk.getPtr()){
             g_mapProjs[pid].leftSize = BLOCKSIZE - dataLen + g_mapProjs[pid].leftSize;
+            bvalidblk = true;
+            break;
+        }
+        else if(!iswait){
+            LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. as DataBlock pool is full.", pid);
+            break;
         }
         else{
-            LOGFMT_ERROR(g_BufferLogger, "PID=%lu GlobalBuffer receive data failed. as DataBlock pool is full.", pid);
             g_ProjsLocker.unLock();
-            return ;
+            usleep(100000);
+            g_ProjsLocker.lock();
+        }
         }
     }
     else{
@@ -444,7 +453,8 @@ void recvProjSegment(ProjectSegment param, bool iswait)
     }
     g_ProjsLocker.unLock();
 
-    unsigned rlen = tmpPrj->recvData(data, dataLen, &blk);
+    if(bvalidblk)
+        unsigned rlen = tmpPrj->recvData(data, dataLen, &blk);
     /*
        if(rlen == dataLen){
        } 
